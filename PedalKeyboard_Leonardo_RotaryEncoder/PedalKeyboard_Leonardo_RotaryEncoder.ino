@@ -429,7 +429,8 @@ void setup(){
   Serial.begin( 115200 );
   //_____USB_HOST_STUFF_____
   #if !defined(__MIPSEL__)
-    while (!Serial); // Wait for serial port to connect - used on Leonardo, Teensy and other boards with built-in USB CDC serial connection
+    //while (!Serial); // Wait for serial port to connect - used on Leonardo, Teensy and other boards with built-in USB CDC serial connection
+    delay(1);
   #endif
   Serial.println("Start");
   if (Usb.Init() == -1)
