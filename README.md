@@ -1,4 +1,5 @@
-Code Download: [click me to download](https://github.com/Max1makes/GamingPedalKeyboard/blob/main/PedalKeyboard_Leonardo_RotaryEncoder/PedalKeyboard_Leonardo_RotaryEncoder.ino)
+[Click to download code](https://raw.githubusercontent.com/Max1makes/GamingPedalKeyboard/main/PedalKeyboard_Leonardo_RotaryEncoder/PedalKeyboard_Leonardo_RotaryEncoder.ino)
+
 
 WIP! See https://youtu.be/lx6oRmMFdbE
 Build Guide Video: Coming Soon
