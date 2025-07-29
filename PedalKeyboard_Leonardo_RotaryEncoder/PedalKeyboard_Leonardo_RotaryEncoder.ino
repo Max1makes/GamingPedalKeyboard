@@ -1,12 +1,22 @@
 #include <hidboot.h>
 #include <usbhub.h>
 #include <Keyboard.h>
-
 // Satisfy the IDE, which needs to see the include statment in the ino too. //This is from the usb host example, not sure what it does
 #ifdef dobogusinclude
 #include <spi4teensy3.h>
 #endif
 #include <SPI.h>
+//------------------------------------------------------
+//_____Variables_To_Change_____
+const int WALK_SPEED = 2000; // Speed at which walk is triggered
+const int SPRINT_SPEED = 16000;//22000; // Speed at which sprint is triggered
+const int STOP_SPRINT_SPEED = 9000;//6000 12000; // Speed must drop below this value to stop sprinting
+bool sprint_on_press = false; //True if pressing sprint makes you faster, false if it makes you slower (eg csgo pressing shift)
+bool move_when_no_input = true; //walk forwards and backwards if pedalling and no keys pressed
+const uint8_t sprintKey = KEY_LEFT_SHIFT; 
+//---------------------------------------
+
+
 //_____Keyboard_codes_____
 const uint8_t EscapeCode = 0x29;
 const uint8_t BackspaceCode = 0x2A;
@@ -34,14 +44,7 @@ unsigned long lastTime = 0; // Last time the speed was calculated
 float speed = 0;            // Speed of rotation
 bool pedalForward = true;      // Direction of rotation, true if pedalling forwards
 
-//_____Speed/Movement_Stuff_____
-const int WALK_SPEED = 2000; // Speed at which walk is triggered
-const int SPRINT_SPEED = 16000;//22000; // Speed at which sprint is triggered
-const int STOP_SPRINT_SPEED = 9000;//6000 12000; // Speed must drop below this value to stop sprinting
 
-bool sprint_on_press = true; //True if pressing sprint makes you faster, false if it makes you slower (eg csgo pressing shift)
-bool move_when_no_input = true; //walk forwards and backwards if pedalling and no keys pressed
-const uint8_t sprintKey = KEY_LEFT_SHIFT; 
 // movement keys wasd
 // Define the keycodes for WASD keys
 const uint8_t WKey = 0x1A; // Keycode for 'W'
