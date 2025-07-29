@@ -1,5 +1,5 @@
 Click the button below to download the code:<br>
- [![Download Code](https://img.shields.io/badge/Download-.ino-blue?style=for-the-badge&logo=github)](https://github.com/Max1makes/GamingPedalKeyboard/releases/download/V1.0/PedalKeyboard_Leonardo_RotaryEncoder.ino)
+ [![Download Code](https://img.shields.io/badge/Download-.ino-blue?style=for-the-badge&logo=github)](https://github.com/Max1makes/GamingPedalKeyboard/releases/download/V1.1/PedalKeyboard_Leonardo_RotaryEncoder.ino)
 <br>
 <br>
 WIP! See https://youtu.be/lx6oRmMFdbE<br>
