@@ -10,3 +10,9 @@ Parts Links Amazon:<br>
 <br>
 Parts Links Aliexpress:<br>
   -Coming Soon<br>
+<br>
+Troubleshooting:<br>
+ - Unplug all cables
+ - Plug ion the arduino data cable, then the keyboard
+ - Wait 20 seconds, check if it is working
+ - If there is strange behaviour, try adding an extrnal power supply to the Arduino (see parts list)
