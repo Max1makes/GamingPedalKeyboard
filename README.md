@@ -1,3 +1,5 @@
+TESTING FILE: Will be attempting to reduce felt delay on changes of pedalling, and allow the software to work in games that do not have a hold to sprint option. (POSSIBLE by tracking if currently sprinting or not and sending a sprint keypress)
+
 Click the button below to download the code:<br>
  [![Download Code](https://img.shields.io/badge/Download-.ino-blue?style=for-the-badge&logo=github)](https://github.com/Max1makes/GamingPedalKeyboard/releases/download/V1.1/PedalKeyboard_Leonardo_RotaryEncoder.ino)
 <br>
