@@ -9,11 +9,17 @@
 //------------------------------------------------------
 //_____Variables_To_Change_____
 const int WALK_SPEED = 2000; // Speed at which walk is triggered
+const int WALK_STOP_SPEED = 1400; // Speed must drop below this to stop moving (gap to WALK_SPEED stops keys chattering when speed hovers near the threshold)
 const int SPRINT_SPEED = 16000;//22000; // Speed at which sprint is triggered
 const int STOP_SPRINT_SPEED = 9000;//6000 12000; // Speed must drop below this value to stop sprinting
+const unsigned long MIN_MODE_DWELL = 150; // ms. Minimum time between walk<->sprint switches, so the sprint key can never be toggled rapidly
+const unsigned long MOVE_RELEASE_DELAY = 0; // ms. Extra time to keep moving after speed drops below WALK_STOP_SPEED. 0 = stop as fast as possible
+const float RISE_ALPHA = 0.3; // Speed filter response when speeding up (0-1, higher = faster). Slow rise ignores single-window spikes
+const float FALL_ALPHA = 0.7; // Speed filter response when slowing down. Fast fall keeps stopping responsive
+const bool DEBUG_SPEED_PLOT = false; // Print speed to the serial plotter every update. Leave off when playing: serial writes can stall the loop
 bool sprint_on_press = false; //True if pressing sprint makes you faster, false if it makes you slower (eg csgo pressing shift)
 bool move_when_no_input = true; //walk forwards and backwards if pedalling and no keys pressed
-const uint8_t sprintKey = KEY_LEFT_SHIFT; 
+const uint8_t sprintKey = KEY_LEFT_SHIFT;
 //---------------------------------------
 
 
@@ -59,12 +65,81 @@ bool crouched = false;
 
 //_____Keyboard_Stuff_____
 const unsigned long timerInterval = 5; // Speed update every timerInterval ms
-const unsigned long unpressInterval = 2 * timerInterval; // Allows smooth movement if its bigger than timer interval
-unsigned long lastWInput = 0;
-unsigned long lastAInput = 0;
-unsigned long lastSInput = 0;
-unsigned long lastDInput = 0;
-unsigned long lastSprintInput = 0;
+
+//BEGIN_CONTROL_LOGIC (hardware independent apart from Keyboard, extracted by the off-target test)
+// A key the pedal logic controls. `down` is what the PC currently sees, so a report is only
+// sent when the state really changes (Keyboard.press/release send a USB report on every call).
+struct GatedKey {
+  uint8_t code;
+  bool down;
+};
+GatedKey gkW = {'w', false};
+GatedKey gkA = {'a', false};
+GatedKey gkS = {'s', false};
+GatedKey gkD = {'d', false};
+GatedKey gkSprint = {sprintKey, false};
+
+float filtSpeed = 0;              // Asymmetrically filtered speed
+bool moving = false;              // Pedalling fast enough to move (with hysteresis)
+bool sprintMode = false;          // In the sprint speed range (with hysteresis)
+unsigned long lastAboveStop = 0;  // Last time speed was above WALK_STOP_SPEED while moving
+unsigned long lastModeChange = 0; // Last walk<->sprint switch
+
+void setGated(GatedKey &k, bool want) {
+  if (want == k.down) return;
+  if (want) Keyboard.press(k.code); else Keyboard.release(k.code);
+  k.down = want;
+}
+
+// Call once per speed sample. Decides moving/sprintMode from the new speed.
+void updateControlState(float rawSpeed, unsigned long now) {
+  // Fast attack on slowdown, slow on speedup: stopping is seen quickly, spikes upward are smoothed
+  float alpha = (rawSpeed > filtSpeed) ? RISE_ALPHA : FALL_ALPHA;
+  filtSpeed += alpha * (rawSpeed - filtSpeed);
+
+  if (filtSpeed >= WALK_SPEED) {
+    if (!moving) {
+      moving = true;
+      sprintMode = filtSpeed > STOP_SPRINT_SPEED; // Start in the right mode without waiting for the dwell
+      lastModeChange = now;
+    }
+    lastAboveStop = now;
+  } else if (moving) {
+    if (filtSpeed >= WALK_STOP_SPEED) {
+      lastAboveStop = now;                        // Inside the hysteresis gap, keep moving
+    } else if (now - lastAboveStop >= MOVE_RELEASE_DELAY) {
+      moving = false;
+    }
+  }
+
+  // Walk<->sprint switching has hysteresis (SPRINT_SPEED / STOP_SPRINT_SPEED) and a minimum dwell
+  if (moving && (now - lastModeChange >= MIN_MODE_DWELL)) {
+    if (!sprintMode && filtSpeed > SPRINT_SPEED) {
+      sprintMode = true;
+      lastModeChange = now;
+    } else if (sprintMode && filtSpeed < STOP_SPRINT_SPEED) {
+      sprintMode = false;
+      lastModeChange = now;
+    }
+  }
+}
+
+// Call every loop. Only sends USB reports when a key actually needs to change.
+void applyKeys() {
+  bool noKeys = !(wPressed || aPressed || sPressed || dPressed);
+  // Sprint key: pressed to sprint, or pressed to walk (eg csgo shift). Not while crouched
+  // (fixes bug where you cannot walk left while crouched in valorant if you let go and re press "a")
+  bool wantSprintKey = moving && (sprint_on_press ? sprintMode : (!sprintMode && !crouched));
+  setGated(gkSprint, wantSprintKey);
+
+  // Physical keys are only passed through while pedalling. Pedalling with no keys pressed moves
+  // forwards or backwards (direction of the pedals).
+  setGated(gkW, moving && (wPressed || (noKeys && move_when_no_input && pedalForward)));
+  setGated(gkA, moving && aPressed);
+  setGated(gkS, moving && (sPressed || (noKeys && move_when_no_input && !pedalForward)));
+  setGated(gkD, moving && dPressed);
+}
+//END_CONTROL_LOGIC
 
 
 class KbdRptParser : public KeyboardReportParser
@@ -108,18 +183,22 @@ void KbdRptParser::OnKeyDown(uint8_t mod, uint8_t key)
         case WKey:
           Serial.println("W pressed override for movement");
           wPressed = true;
+          gkW.down = true; // passed through below, applyKeys() releases it if not pedalling
           break;
         case AKey:
           Serial.println("A pressed override for movement");
           aPressed = true;
+          gkA.down = true; // passed through below, applyKeys() releases it if not pedalling
           break;
         case SKey:
           Serial.println("S pressed override for movement");
           sPressed = true;
+          gkS.down = true; // passed through below, applyKeys() releases it if not pedalling
           break;
         case DKey:
           Serial.println("D pressed override for movement");
           dPressed = true;
+          gkD.down = true; // passed through below, applyKeys() releases it if not pedalling
           break;
   }
   uint8_t c = OemToAscii(mod, key);
@@ -146,18 +225,22 @@ void KbdRptParser::OnKeyUp(uint8_t mod, uint8_t key){
         case WKey:
           Serial.println("W unpressed ovveride for movement");
           wPressed = false;
+          gkW.down = false;
           break;
         case AKey:
           Serial.println("A unpressed ovveride for movement");
           aPressed = false;
+          gkA.down = false;
           break;
         case SKey:
           Serial.println("S unpressed ovveride for movement");
           sPressed = false;
+          gkS.down = false;
           break;
         case DKey:
           Serial.println("D unpressed ovveride for movement");
           dPressed = false;
+          gkD.down = false;
           break;
   }
   uint8_t c = OemToAscii(mod, key);
@@ -200,10 +283,12 @@ void KbdRptParser::OnControlKeysChanged(uint8_t before, uint8_t after) {
     if (beforeMod.bmLeftShift == 0 && afterMod.bmLeftShift == 1) {
         Serial.println("LeftShift pressed");
         Keyboard.press(KEY_LEFT_SHIFT);
+        if (sprintKey == KEY_LEFT_SHIFT) gkSprint.down = true;
     }
     if (beforeMod.bmLeftShift == 1 && afterMod.bmLeftShift == 0) {
         Serial.println("LeftShift released");
         Keyboard.release(KEY_LEFT_SHIFT);
+        if (sprintKey == KEY_LEFT_SHIFT) gkSprint.down = false;
     }
 
     if (beforeMod.bmLeftAlt == 0 && afterMod.bmLeftAlt == 1) {
@@ -457,38 +542,45 @@ void setup(){
 }
 
 void updateSpeedDirection(){
-  // Calculate speed and direction every 100 ms
+  // Calculate speed and direction every timerInterval ms
   unsigned long currentTime = millis();
   if (currentTime - lastTime >= timerInterval)
   {
-    long encoderDelta = encoderValue - lastEncoderValue;
-    pedalForward = (encoderDelta > 0) ? true : (encoderDelta < 0) ? false : true; //defualt to forward
+    noInterrupts(); // encoderValue is 32 bit, the ISR can change it mid read on an 8 bit AVR
+    long encoderValue_copy = encoderValue;
+    interrupts();
+    long encoderDelta = encoderValue_copy - lastEncoderValue;
+    if (encoderDelta > 0) pedalForward = true;
+    else if (encoderDelta < 0) pedalForward = false; // no change in position keeps the last direction
 
     speed = abs(encoderDelta) / ((currentTime - lastTime) / 1000.0); // Pulses per second
 
-    lastEncoderValue = encoderValue;
+    lastEncoderValue = encoderValue_copy;
     lastTime = currentTime;
 
-    // Output speed and direction
-    //Serial.print("Speed: ");
-    
-    Serial.print(0); // To freeze the lower limit
-    Serial.print(" ");
-    Serial.print(35000); // To freeze the upper limit
-    
-    Serial.print(" ");
-    Serial.println(speed);
-  
-    //Serial.print(" pulses/sec, Forward: ");
-    //Serial.println(pedalForward);
+    updateControlState(speed, currentTime);
+
+    if (DEBUG_SPEED_PLOT) {
+      Serial.print(0); // To freeze the lower limit
+      Serial.print(" ");
+      Serial.print(35000); // To freeze the upper limit
+      Serial.print(" ");
+      Serial.print(speed);
+      Serial.print(" ");
+      Serial.println(filtSpeed);
+    }
   }
 }
 
 void updateEncoder(){
+#if defined(__AVR_ATmega32U4__)
+  // Pins 2 and 3 are PD1 and PD0 on the Leonardo, so one port read gives (pin2 << 1) | pin3. Much faster than digitalRead
+  int encoded = PIND & 0x03;
+#else
   int MSB = digitalRead(encoder_Pin_1); // MSB = most significant bit
   int LSB = digitalRead(encoder_Pin_2); // LSB = least significant bit
-
   int encoded = (MSB << 1) | LSB;       // converting the 2 pin value to single number
+#endif
   int sum = (lastEncoded << 2) | encoded; // adding it to the previous encoded value
 
   if (sum == 0b1101 || sum == 0b0100 || sum == 0b0010 || sum == 0b1011)
@@ -499,131 +591,10 @@ void updateEncoder(){
   lastEncoded = encoded; // store this value for next time
 }
 
-void movementInputs(){
-  /*
-  Keyboard.release('w');
-  Keyboard.release('a');
-  Keyboard.release('s');
-  Keyboard.release('d');
-  */
-  unsigned long currentTime = millis();
-
-  //Release keys if time is over
-  if (currentTime >= (lastSprintInput + unpressInterval)) {
-    Keyboard.release(sprintKey);
-  }
-  if (currentTime >= (lastWInput + unpressInterval)) {
-    Keyboard.release('w');
-  }
-  if (currentTime >= (lastAInput + unpressInterval)) {
-    Keyboard.release('a');
-  }
-  if (currentTime >= (lastSInput + unpressInterval)) {
-    Keyboard.release('s');
-  }
-  if (currentTime >= (lastDInput + unpressInterval)) {
-    Keyboard.release('d');
-  }
-
-  //Extend time if still pressed and pedal fast enough
-  if (sprint_on_press){
-    if (speed >= SPRINT_SPEED) {
-      Keyboard.press(sprintKey);
-      lastSprintInput = currentTime;
-    }
-    else if (speed >= STOP_SPRINT_SPEED){
-      lastSprintInput = currentTime;
-    }
-
-  } else{
-    /* Debugging sprint behaviour
-    Serial.println("Speed: "); Serial.println(speed);
-    Serial.print("STOP_SPRINT_SPEED: "); Serial.println(STOP_SPRINT_SPEED);
-    Serial.print("SPRINT_SPEED: "); Serial.println(SPRINT_SPEED);
-    Serial.print("WALK_SPEED: "); Serial.println(WALK_SPEED);
-    */
-    if (speed <= STOP_SPRINT_SPEED) {
-      if (speed >= WALK_SPEED){
-        if (!(crouched)){//fixes bug where you cannot walk left while croud in valorant if you let go and re press "a"
-          Keyboard.press(sprintKey); //pressing this to walk
-          lastSprintInput = currentTime;
-        }
-      }
-    }
-    else if (speed <= SPRINT_SPEED){
-      if (speed >= WALK_SPEED){
-        //Keyboard.press(sprintKey); //pressing this to walk
-        if (!(crouched)){
-          lastSprintInput = currentTime;
-        }
-      }
-    }
-    else{
-      Serial.println("What");
-    } 
-  }
-
-  if (speed >= WALK_SPEED){
-    if (pedalForward){
-      if (wPressed){
-        Keyboard.press('w');
-        lastWInput = currentTime;
-      }
-      if (aPressed){
-        Keyboard.press('a');
-        lastAInput = currentTime;
-      }
-      if (sPressed){
-        Keyboard.press('s');
-        lastSInput = currentTime;
-      }
-      if (dPressed){
-        Keyboard.press('d');
-        lastDInput = currentTime;
-      }
-
-      if (!(wPressed || aPressed || sPressed || dPressed)){
-        if (move_when_no_input){
-          Keyboard.press('w');
-          lastWInput = currentTime;
-        }
-      }
-
-    } else{
-    //press opposite key if pedalling backward
-      if (wPressed){
-        Keyboard.press('w');
-        lastWInput = currentTime;
-      }
-      if (aPressed){
-        Keyboard.press('a');
-        lastAInput = currentTime;
-      }
-      if (sPressed){
-        Keyboard.press('s');
-        lastSInput = currentTime;
-      }
-      if (dPressed){
-        Keyboard.press('d');
-        lastDInput = currentTime;
-      }
-
-      if (!(wPressed || aPressed || sPressed || dPressed)){
-        if (move_when_no_input){
-          Keyboard.press('s');
-          lastSInput = currentTime;
-        }
-      }
-
-    }
-  }
-
-}
-
 void loop()
 {
   updateSpeedDirection();
   Usb.Task();
-  movementInputs();
+  applyKeys();
 }
 
