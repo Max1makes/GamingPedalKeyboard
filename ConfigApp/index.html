@@ -1,0 +1,424 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Pedal Keyboard Config</title>
+<style>
+  :root {
+    color-scheme: light;
+    --bg: #f4f4f2;
+    --surface: #fcfcfb;
+    --border: #dcdbd6;
+    --text: #0b0b0b;
+    --text-2: #52514e;
+    --text-3: #7a7974;
+    --accent: #2a78d6;
+    --accent-text: #ffffff;
+    --grid: #e6e5e0;
+    --speed: #2a78d6;
+    --walk: #1baf7a;
+    --stop: #eda100;
+    --sprint: #eb6834;
+    --warn-bg: #fff4d6;
+    --warn-text: #6b4a00;
+    --err-text: #b42318;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      color-scheme: dark;
+      --bg: #121211;
+      --surface: #1a1a19;
+      --border: #34332f;
+      --text: #f0efec;
+      --text-2: #c3c2b7;
+      --text-3: #8f8e86;
+      --accent: #3987e5;
+      --grid: #2a2a27;
+      --speed: #3987e5;
+      --walk: #199e70;
+      --stop: #c98500;
+      --sprint: #d95926;
+      --warn-bg: #3a2e0c;
+      --warn-text: #f5d58a;
+      --err-text: #ff8a80;
+    }
+  }
+  :root[data-theme="dark"] {
+    color-scheme: dark;
+    --bg: #121211;
+    --surface: #1a1a19;
+    --border: #34332f;
+    --text: #f0efec;
+    --text-2: #c3c2b7;
+    --text-3: #8f8e86;
+    --accent: #3987e5;
+    --grid: #2a2a27;
+    --speed: #3987e5;
+    --walk: #199e70;
+    --stop: #c98500;
+    --sprint: #d95926;
+    --warn-bg: #3a2e0c;
+    --warn-text: #f5d58a;
+    --err-text: #ff8a80;
+  }
+
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font: 15px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  }
+  main { max-width: 760px; margin: 0 auto; padding: 24px 16px 48px; }
+  h1 { font-size: 22px; margin: 0; }
+  h2 { font-size: 15px; margin: 0 0 12px; }
+  header { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; margin-bottom: 16px; }
+  .card { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 16px; margin-bottom: 16px; }
+  .muted { color: var(--text-2); }
+  .small { font-size: 13px; }
+  button {
+    font: inherit; border-radius: 8px; padding: 8px 14px; cursor: pointer;
+    border: 1px solid var(--border); background: var(--surface); color: var(--text);
+  }
+  button.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-text); }
+  button:disabled { opacity: 0.5; cursor: not-allowed; }
+  .status { display: flex; align-items: center; gap: 8px; }
+  .dot { width: 10px; height: 10px; border-radius: 50%; background: var(--text-3); }
+  .dot.on { background: var(--walk); }
+  .notice { background: var(--warn-bg); color: var(--warn-text); border-radius: 8px; padding: 10px 12px; margin-bottom: 16px; }
+  .hidden { display: none !important; }
+  fieldset { border: 0; padding: 0; margin: 0; }
+  fieldset:disabled { opacity: 0.55; }
+  .mode label { display: flex; gap: 10px; align-items: flex-start; padding: 8px 0; cursor: pointer; }
+  .mode input { margin-top: 4px; }
+  .row { display: grid; grid-template-columns: 1fr 110px; gap: 4px 12px; align-items: center; margin-bottom: 14px; }
+  .row .name { display: flex; align-items: center; gap: 8px; font-weight: 600; }
+  .row .help { grid-column: 1 / -1; font-size: 13px; color: var(--text-2); }
+  .row input[type=range] { grid-column: 1 / 2; width: 100%; }
+  .row input[type=number] { width: 100%; font: inherit; padding: 4px 6px; border-radius: 6px; border: 1px solid var(--border); background: var(--bg); color: var(--text); }
+  .swatch { width: 14px; height: 3px; border-radius: 2px; display: inline-block; }
+  .check { display: flex; gap: 10px; align-items: center; cursor: pointer; }
+  .actions { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
+  .warn { color: var(--err-text); font-size: 13px; min-height: 1em; margin: 0 0 8px; }
+  .speedline { display: flex; align-items: baseline; gap: 8px; margin-bottom: 8px; }
+  .speedline .value { font-size: 28px; font-weight: 600; font-variant-numeric: tabular-nums; }
+  canvas { width: 100%; height: 220px; display: block; }
+  .legend { display: flex; gap: 16px; flex-wrap: wrap; font-size: 13px; color: var(--text-2); margin-top: 8px; }
+  .legend span { display: inline-flex; align-items: center; gap: 6px; }
+  #log { font: 12px/1.4 ui-monospace, Menlo, Consolas, monospace; max-height: 140px; overflow: auto; white-space: pre-wrap; margin: 0; color: var(--text-2); }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <h1>Pedal Keyboard Config</h1>
+    <div class="status">
+      <span class="dot" id="statusDot"></span>
+      <span id="statusText" class="muted">Not connected</span>
+      <button class="primary" id="connectBtn">Connect</button>
+    </div>
+  </header>
+
+  <div class="notice hidden" id="unsupported">
+    This browser can't talk to the Arduino. Open this page in Chrome or Edge on a desktop computer.
+  </div>
+  <div class="notice hidden" id="oldFirmware">
+    Connected, but the Arduino didn't reply with its settings. Upload the latest PedalKeyboard_Leonardo_RotaryEncoder.ino and try again.
+  </div>
+
+  <fieldset id="settingsFields" disabled>
+    <section class="card">
+      <h2>What does Shift do in your game?</h2>
+      <div class="mode">
+        <label><input type="radio" name="mode" value="1"><span><strong>Sprint</strong><br><span class="muted small">Shift is pressed when you pedal fast.</span></span></label>
+        <label><input type="radio" name="mode" value="0"><span><strong>Walk</strong> <span class="muted small">(e.g. CS)</span><br><span class="muted small">Shift is pressed when you pedal slowly and released when you pedal fast.</span></span></label>
+      </div>
+    </section>
+
+    <section class="card">
+      <h2>Thresholds</h2>
+      <div class="row">
+        <span class="name"><span class="swatch" style="background:var(--walk)"></span>Move</span>
+        <span></span>
+        <input type="range" min="0" max="35000" step="100" data-key="walk">
+        <input type="number" min="0" step="100" data-key="walk">
+        <span class="help">Pedal faster than this to move.</span>
+      </div>
+      <div class="row">
+        <span class="name"><span class="swatch" style="background:var(--sprint)"></span>Start sprint</span>
+        <span></span>
+        <input type="range" min="0" max="35000" step="100" data-key="sprint">
+        <input type="number" min="0" step="100" data-key="sprint">
+        <span class="help">Pedal faster than this to start sprinting.</span>
+      </div>
+      <div class="row">
+        <span class="name"><span class="swatch" style="background:var(--stop)"></span>Stop sprint</span>
+        <span></span>
+        <input type="range" min="0" max="35000" step="100" data-key="stop">
+        <input type="number" min="0" step="100" data-key="stop">
+        <span class="help">Once sprinting, slow below this to stop sprinting.</span>
+      </div>
+      <p class="warn" id="warn"></p>
+      <label class="check"><input type="checkbox" id="moveWhenNoInput"> Move forwards/backwards when pedalling with no WASD key held</label>
+    </section>
+
+    <section class="card">
+      <div class="actions">
+        <button class="primary" id="saveBtn">Save to Arduino</button>
+        <button id="resetBtn">Reset to defaults</button>
+        <span id="saveState" class="muted small"></span>
+      </div>
+      <p class="muted small" style="margin:10px 0 0">Changes apply straight away. Save keeps them after the Arduino is unplugged.</p>
+    </section>
+  </fieldset>
+
+  <section class="card">
+    <h2>Live speed</h2>
+    <div class="speedline"><span class="value" id="speedValue">–</span><span class="muted small">pulses/sec</span></div>
+    <canvas id="chart" aria-label="Pedal speed over the last 10 seconds with threshold lines" role="img"></canvas>
+    <div class="legend">
+      <span><span class="swatch" style="background:var(--speed)"></span>Speed</span>
+      <span><span class="swatch" style="background:var(--walk)"></span>Move</span>
+      <span><span class="swatch" style="background:var(--stop)"></span>Stop sprint</span>
+      <span><span class="swatch" style="background:var(--sprint)"></span>Start sprint</span>
+    </div>
+  </section>
+
+  <details class="card">
+    <summary class="small muted">Serial log</summary>
+    <pre id="log"></pre>
+  </details>
+</main>
+
+<script>
+(() => {
+  const $ = (id) => document.getElementById(id);
+  const HISTORY_MS = 10000;
+  const PLOT_MAX = 35000; // Matches the upper limit the sketch prints for the Serial Plotter
+
+  let port = null;
+  let writer = null;
+  let reader = null;
+  let settings = null;               // Last CFG received from the Arduino
+  const pendingSends = {};           // key -> timeout id, while a slider is being moved
+  const samples = [];                // {t, v}
+
+  if (!('serial' in navigator)) {
+    $('unsupported').classList.remove('hidden');
+    $('connectBtn').disabled = true;
+  }
+
+  // ---------- Serial ----------
+  async function connect() {
+    try {
+      port = await navigator.serial.requestPort();
+      await port.open({ baudRate: 115200 });
+      await port.setSignals({ dataTerminalReady: true }).catch(() => {});
+    } catch (e) {
+      log('Connect failed: ' + e.message);
+      port = null;
+      return;
+    }
+    writer = port.writable.getWriter();
+    setConnected(true);
+    readLoop();
+    // Ask for the settings, and warn if the firmware never answers
+    send('GET');
+    setTimeout(() => { if (port && !settings) send('GET'); }, 1000);
+    setTimeout(() => { if (port && !settings) $('oldFirmware').classList.remove('hidden'); }, 2500);
+  }
+
+  async function disconnect() {
+    try { await reader?.cancel(); } catch {}
+  }
+
+  async function readLoop() {
+    const decoder = new TextDecoderStream();
+    const closed = port.readable.pipeTo(decoder.writable).catch(() => {});
+    reader = decoder.readable.getReader();
+    let buffer = '';
+    try {
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        buffer += value;
+        let i;
+        while ((i = buffer.indexOf('\n')) >= 0) {
+          handleLine(buffer.slice(0, i).trim());
+          buffer = buffer.slice(i + 1);
+        }
+      }
+    } catch (e) {
+      log('Read stopped: ' + e.message);
+    }
+    try { await reader.cancel(); } catch {}
+    reader = null;
+    await closed;
+    try { writer.releaseLock(); } catch {}
+    try { await port.close(); } catch {}
+    port = null; writer = null; settings = null;
+    setConnected(false);
+  }
+
+  async function send(line) {
+    if (!writer) return;
+    log('> ' + line);
+    try { await writer.write(new TextEncoder().encode(line + '\n')); }
+    catch (e) { log('Write failed: ' + e.message); }
+  }
+
+  function handleLine(line) {
+    if (!line) return;
+    // Speed lines are "0 35000 <speed>" (the first two numbers fix the Serial Plotter's scale)
+    const m = /^0 35000 (-?[\d.]+)$/.exec(line);
+    if (m) { addSample(parseFloat(m[1])); return; }
+    if (line.startsWith('CFG ')) { applyCfg(line); }
+    log(line);
+  }
+
+  function applyCfg(line) {
+    const cfg = {};
+    for (const part of line.slice(4).split(' ')) {
+      const [k, v] = part.split('=');
+      cfg[k] = Number(v);
+    }
+    settings = cfg;
+    $('oldFirmware').classList.add('hidden');
+    $('settingsFields').disabled = false;
+    for (const key of ['walk', 'sprint', 'stop']) {
+      if (pendingSends[key]) continue; // Don't fight the slider the user is dragging
+      document.querySelectorAll(`[data-key="${key}"]`).forEach((el) => { el.value = cfg[key]; });
+    }
+    document.querySelector(`input[name=mode][value="${cfg.sprintOnPress}"]`).checked = true;
+    $('moveWhenNoInput').checked = cfg.moveWhenNoInput === 1;
+    $('saveState').textContent = cfg.saved ? 'Saved on Arduino' : 'Unsaved changes';
+    validate();
+  }
+
+  // ---------- Controls ----------
+  function currentThresholds() {
+    const get = (k) => Number(document.querySelector(`input[type=number][data-key="${k}"]`).value);
+    return { walk: get('walk'), sprint: get('sprint'), stop: get('stop') };
+  }
+
+  function validate() {
+    const t = currentThresholds();
+    const problems = [];
+    if (t.stop > t.sprint) problems.push('Stop sprint should be lower than start sprint.');
+    if (t.walk > t.stop) problems.push('Move should be lower than stop sprint.');
+    $('warn').textContent = problems.join(' ');
+  }
+
+  document.querySelectorAll('[data-key]').forEach((el) => {
+    el.addEventListener('input', () => {
+      const key = el.dataset.key;
+      const value = Math.max(0, Math.round(Number(el.value) || 0));
+      document.querySelectorAll(`[data-key="${key}"]`).forEach((other) => { if (other !== el) other.value = value; });
+      validate();
+      clearTimeout(pendingSends[key]);
+      pendingSends[key] = setTimeout(() => {
+        delete pendingSends[key];
+        send(`SET ${key}=${value}`);
+      }, 120);
+    });
+  });
+
+  document.querySelectorAll('input[name=mode]').forEach((el) => {
+    el.addEventListener('change', () => send(`SET sprintOnPress=${el.value}`));
+  });
+  $('moveWhenNoInput').addEventListener('change', (e) => send(`SET moveWhenNoInput=${e.target.checked ? 1 : 0}`));
+  $('saveBtn').addEventListener('click', () => send('SAVE'));
+  $('resetBtn').addEventListener('click', () => {
+    if (confirm('Reset all settings to the defaults in the Arduino code?')) send('RESET');
+  });
+  $('connectBtn').addEventListener('click', () => (port ? disconnect() : connect()));
+
+  function setConnected(on) {
+    $('statusDot').classList.toggle('on', on);
+    $('statusText').textContent = on ? 'Connected' : 'Not connected';
+    $('connectBtn').textContent = on ? 'Disconnect' : 'Connect';
+    if (!on) {
+      $('settingsFields').disabled = true;
+      $('saveState').textContent = '';
+      $('speedValue').textContent = '–';
+      $('oldFirmware').classList.add('hidden');
+    }
+  }
+
+  if ('serial' in navigator) {
+    navigator.serial.addEventListener('disconnect', (e) => { if (e.target === port) disconnect(); });
+  }
+
+  function log(text) {
+    const el = $('log');
+    el.textContent += text + '\n';
+    if (el.textContent.length > 20000) el.textContent = el.textContent.slice(-10000);
+    el.scrollTop = el.scrollHeight;
+  }
+
+  // ---------- Live chart ----------
+  function addSample(v) {
+    const now = performance.now();
+    samples.push({ t: now, v });
+    while (samples.length && samples[0].t < now - HISTORY_MS) samples.shift();
+  }
+
+  const canvas = $('chart');
+  const ctx = canvas.getContext('2d');
+  const css = (name) => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+
+  function draw() {
+    const dpr = window.devicePixelRatio || 1;
+    const w = canvas.clientWidth, h = canvas.clientHeight;
+    if (canvas.width !== Math.round(w * dpr) || canvas.height !== Math.round(h * dpr)) {
+      canvas.width = Math.round(w * dpr); canvas.height = Math.round(h * dpr);
+    }
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.clearRect(0, 0, w, h);
+
+    const pad = { l: 48, r: 8, t: 8, b: 8 };
+    const pw = w - pad.l - pad.r, ph = h - pad.t - pad.b;
+    const t = currentThresholds();
+    const peak = samples.reduce((m, s) => Math.max(m, s.v), 0);
+    const yMax = Math.max(PLOT_MAX, t.walk, t.stop, t.sprint, peak) * 1.05;
+    const y = (v) => pad.t + ph - (v / yMax) * ph;
+    const now = performance.now();
+    const x = (ts) => pad.l + pw - ((now - ts) / HISTORY_MS) * pw;
+
+    // Grid and axis labels
+    ctx.font = '11px system-ui, sans-serif';
+    ctx.textAlign = 'right'; ctx.textBaseline = 'middle';
+    ctx.lineWidth = 1;
+    for (let v = 0; v <= yMax; v += 10000) {
+      ctx.strokeStyle = css('--grid');
+      ctx.beginPath(); ctx.moveTo(pad.l, Math.round(y(v)) + 0.5); ctx.lineTo(pad.l + pw, Math.round(y(v)) + 0.5); ctx.stroke();
+      ctx.fillStyle = css('--text-3');
+      ctx.fillText(v === 0 ? '0' : (v / 1000) + 'k', pad.l - 6, y(v));
+    }
+
+    // Threshold lines (only meaningful once settings are loaded)
+    if (settings) {
+      ctx.setLineDash([5, 4]); ctx.lineWidth = 1.5;
+      for (const [key, color] of [['walk', '--walk'], ['stop', '--stop'], ['sprint', '--sprint']]) {
+        ctx.strokeStyle = css(color);
+        ctx.beginPath(); ctx.moveTo(pad.l, y(t[key])); ctx.lineTo(pad.l + pw, y(t[key])); ctx.stroke();
+      }
+      ctx.setLineDash([]);
+    }
+
+    // Speed line
+    if (samples.length > 1) {
+      ctx.strokeStyle = css('--speed'); ctx.lineWidth = 2; ctx.lineJoin = 'round';
+      ctx.beginPath();
+      samples.forEach((s, i) => (i ? ctx.lineTo(x(s.t), y(s.v)) : ctx.moveTo(x(s.t), y(s.v))));
+      ctx.stroke();
+      $('speedValue').textContent = Math.round(samples[samples.length - 1].v).toLocaleString();
+    }
+    requestAnimationFrame(draw);
+  }
+  requestAnimationFrame(draw);
+})();
+</script>
+</body>
+</html>

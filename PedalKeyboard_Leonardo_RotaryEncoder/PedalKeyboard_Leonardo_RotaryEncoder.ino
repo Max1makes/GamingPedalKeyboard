@@ -6,15 +6,41 @@
 #include <spi4teensy3.h>
 #endif
 #include <SPI.h>
+#include <EEPROM.h>
 //------------------------------------------------------
 //_____Variables_To_Change_____
-const int WALK_SPEED = 2000; // Speed at which walk is triggered
-const int SPRINT_SPEED = 16000;//22000; // Speed at which sprint is triggered
-const int STOP_SPRINT_SPEED = 9000;//6000 12000; // Speed must drop below this value to stop sprinting
-bool sprint_on_press = false; //True if pressing sprint makes you faster, false if it makes you slower (eg csgo pressing shift)
-bool move_when_no_input = true; //walk forwards and backwards if pedalling and no keys pressed
+// These are the defaults. They can also be tuned live (and saved to the Arduino) with ConfigApp/index.html
+// Settings saved from the app are ignored if you change any of these defaults and re-upload
+const long WALK_SPEED = 2000; // Speed at which walk is triggered
+const long SPRINT_SPEED = 16000;//22000; // Speed at which sprint is triggered
+const long STOP_SPRINT_SPEED = 9000;//6000 12000; // Speed must drop below this value to stop sprinting
+const bool SPRINT_ON_PRESS = false; //True if pressing sprint makes you faster, false if it makes you slower (eg csgo pressing shift)
+const bool MOVE_WHEN_NO_INPUT = true; //walk forwards and backwards if pedalling and no keys pressed
 const uint8_t sprintKey = KEY_LEFT_SHIFT; 
 //---------------------------------------
+
+//_____Settings_Stuff_____
+struct Settings {
+  long walkSpeed;
+  long sprintSpeed;
+  long stopSprintSpeed;
+  bool sprintOnPress;
+  bool moveWhenNoInput;
+};
+const Settings DEFAULT_SETTINGS = {WALK_SPEED, SPRINT_SPEED, STOP_SPRINT_SPEED, SPRINT_ON_PRESS, MOVE_WHEN_NO_INPUT};
+Settings settings = DEFAULT_SETTINGS; // Values actually in use
+
+// Layout of the settings saved in EEPROM. The defaults are saved too so changing them in code invalidates the saved settings
+const uint16_t SETTINGS_MAGIC = 0x5045; // Change this if the layout of SavedSettings changes
+struct SavedSettings {
+  uint16_t magic;
+  Settings defaults;
+  Settings values;
+};
+bool settingsSaved = true; // False if settings were changed from the app but not saved yet
+
+char commandBuffer[40]; // Serial commands from the config app, one per line
+uint8_t commandLength = 0;
 
 
 //_____Keyboard_codes_____
@@ -453,7 +479,97 @@ void setup(){
   attachInterrupt(digitalPinToInterrupt(encoder_Pin_2), updateEncoder, CHANGE);
   lastTime = millis();
 
+  loadSettings();
+
   Keyboard.releaseAll(); // Sometimes unplugging/restarting can get keys stuck pressed
+}
+
+//_____Config_App_Stuff_____
+void loadSettings(){
+  SavedSettings saved;
+  EEPROM.get(0, saved);
+  if (saved.magic == SETTINGS_MAGIC && memcmp(&saved.defaults, &DEFAULT_SETTINGS, sizeof(Settings)) == 0){
+    settings = saved.values;
+  }
+}
+
+void saveSettings(){
+  SavedSettings saved = {SETTINGS_MAGIC, DEFAULT_SETTINGS, settings};
+  EEPROM.put(0, saved); // Only writes bytes that changed
+  settingsSaved = true;
+}
+
+void resetSettings(){
+  settings = DEFAULT_SETTINGS;
+  EEPROM.put(0, (uint16_t)0); // Forget the saved settings
+  settingsSaved = true;
+}
+
+void printSettings(){ // e.g. CFG walk=2000 sprint=16000 stop=9000 sprintOnPress=0 moveWhenNoInput=1 saved=1
+  Serial.print(F("CFG walk=")); Serial.print(settings.walkSpeed);
+  Serial.print(F(" sprint=")); Serial.print(settings.sprintSpeed);
+  Serial.print(F(" stop=")); Serial.print(settings.stopSprintSpeed);
+  Serial.print(F(" sprintOnPress=")); Serial.print(settings.sprintOnPress);
+  Serial.print(F(" moveWhenNoInput=")); Serial.print(settings.moveWhenNoInput);
+  Serial.print(F(" saved=")); Serial.println(settingsSaved);
+}
+
+bool applySetting(const char* name, long value){
+  if (value < 0) value = 0;
+  if (strcmp(name, "walk") == 0) settings.walkSpeed = value;
+  else if (strcmp(name, "sprint") == 0) settings.sprintSpeed = value;
+  else if (strcmp(name, "stop") == 0) settings.stopSprintSpeed = value;
+  else if (strcmp(name, "sprintOnPress") == 0){
+    if (settings.sprintOnPress != (value != 0)){
+      Keyboard.release(sprintKey); // Don't leave it held from the old mode
+    }
+    settings.sprintOnPress = value != 0;
+  }
+  else if (strcmp(name, "moveWhenNoInput") == 0) settings.moveWhenNoInput = value != 0;
+  else return false;
+  settingsSaved = false;
+  return true;
+}
+
+// Commands (one per line): GET, SET <name>=<value>, SAVE, RESET. Each replies with a CFG line, or ERR
+void handleCommand(char* command){
+  if (strcmp(command, "GET") == 0){
+    // Just print the settings below
+  } else if (strncmp(command, "SET ", 4) == 0){
+    char* equals = strchr(command, '=');
+    if (equals == NULL){
+      Serial.println(F("ERR expected SET name=value"));
+      return;
+    }
+    *equals = '\0';
+    if (!applySetting(command + 4, atol(equals + 1))){
+      Serial.println(F("ERR unknown setting"));
+      return;
+    }
+  } else if (strcmp(command, "SAVE") == 0){
+    saveSettings();
+  } else if (strcmp(command, "RESET") == 0){
+    resetSettings();
+  } else{
+    Serial.println(F("ERR unknown command"));
+    return;
+  }
+  printSettings();
+}
+
+void readSerialCommands(){
+  while (Serial.available() > 0){
+    char c = Serial.read();
+    if (c == '\n' || c == '\r'){
+      if (commandLength > 0){
+        commandBuffer[commandLength] = '\0';
+        handleCommand(commandBuffer);
+        commandLength = 0;
+      }
+    } else if (commandLength < sizeof(commandBuffer) - 1){
+      commandBuffer[commandLength++] = c;
+    }
+  }
 }
 
 void updateSpeedDirection(){
@@ -526,32 +642,32 @@ void movementInputs(){
   }
 
   //Extend time if still pressed and pedal fast enough
-  if (sprint_on_press){
-    if (speed >= SPRINT_SPEED) {
+  if (settings.sprintOnPress){
+    if (speed >= settings.sprintSpeed) {
       Keyboard.press(sprintKey);
       lastSprintInput = currentTime;
     }
-    else if (speed >= STOP_SPRINT_SPEED){
+    else if (speed >= settings.stopSprintSpeed){
       lastSprintInput = currentTime;
     }
 
   } else{
     /* Debugging sprint behaviour
     Serial.println("Speed: "); Serial.println(speed);
-    Serial.print("STOP_SPRINT_SPEED: "); Serial.println(STOP_SPRINT_SPEED);
-    Serial.print("SPRINT_SPEED: "); Serial.println(SPRINT_SPEED);
-    Serial.print("WALK_SPEED: "); Serial.println(WALK_SPEED);
+    Serial.print("STOP_SPRINT_SPEED: "); Serial.println(settings.stopSprintSpeed);
+    Serial.print("SPRINT_SPEED: "); Serial.println(settings.sprintSpeed);
+    Serial.print("WALK_SPEED: "); Serial.println(settings.walkSpeed);
     */
-    if (speed <= STOP_SPRINT_SPEED) {
-      if (speed >= WALK_SPEED){
+    if (speed <= settings.stopSprintSpeed) {
+      if (speed >= settings.walkSpeed){
         if (!(crouched)){//fixes bug where you cannot walk left while croud in valorant if you let go and re press "a"
           Keyboard.press(sprintKey); //pressing this to walk
           lastSprintInput = currentTime;
         }
       }
     }
-    else if (speed <= SPRINT_SPEED){
-      if (speed >= WALK_SPEED){
+    else if (speed <= settings.sprintSpeed){
+      if (speed >= settings.walkSpeed){
         //Keyboard.press(sprintKey); //pressing this to walk
         if (!(crouched)){
           lastSprintInput = currentTime;
@@ -563,7 +679,7 @@ void movementInputs(){
     } 
   }
 
-  if (speed >= WALK_SPEED){
+  if (speed >= settings.walkSpeed){
     if (pedalForward){
       if (wPressed){
         Keyboard.press('w');
@@ -583,7 +699,7 @@ void movementInputs(){
       }
 
       if (!(wPressed || aPressed || sPressed || dPressed)){
-        if (move_when_no_input){
+        if (settings.moveWhenNoInput){
           Keyboard.press('w');
           lastWInput = currentTime;
         }
@@ -609,7 +725,7 @@ void movementInputs(){
       }
 
       if (!(wPressed || aPressed || sPressed || dPressed)){
-        if (move_when_no_input){
+        if (settings.moveWhenNoInput){
           Keyboard.press('s');
           lastSInput = currentTime;
         }
@@ -623,6 +739,7 @@ void movementInputs(){
 void loop()
 {
   updateSpeedDirection();
+  readSerialCommands();
   Usb.Task();
   movementInputs();
 }
