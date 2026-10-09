@@ -16,13 +16,13 @@ const long SPRINT_SPEED = 16000;//22000; // Speed at which sprint is triggered
 const long STOP_SPRINT_SPEED = 9000;//6000 12000; // Speed must drop below this value to stop sprinting
 const bool SPRINT_ON_PRESS = false; //True if pressing sprint makes you faster, false if it makes you slower (eg csgo pressing shift)
 const bool MOVE_WHEN_NO_INPUT = true; //walk forwards and backwards if pedalling and no keys pressed
-const bool QUICK_STOP = false; //Stop moving as soon as you stop pedalling, instead of when the pedals stop spinning (eg cs2)
-const long QUICK_STOP_DROP = 15; // Stopping is detected when the speed falls this % below the slowest point of the last pedal stroke
-const long SMOOTHING_TIME = 150; // ms. Move and sprint use the speed averaged over about this long, so the slow point of each pedal stroke doesn't stop you. 0 = off
+const bool QUICK_STOP = true; //Stop moving as soon as you stop pedalling, instead of when the pedals stop spinning (eg cs2)
+const long QUICK_STOP_DROP = 20; // Stopping is detected when the speed falls this % below the slowest point of the last pedal stroke
+const long SMOOTHING_TIME = 150; // ms. When you slow down, the speed used for move and sprint falls over about this long, so the slow point of each pedal stroke doesn't stop you. Speeding up is instant. 0 = off
 const long STOP_MOVING_PERCENT = 75; // Once moving, keep moving until the speed drops below this % of WALK_SPEED, so it doesn't flicker on and off
 const long MIN_KEY_HOLD = 100; // ms. Movement keys pressed by the pedals stay down at least this long...
 const long MIN_KEY_RELEASE = 50; // ms. ...and stay up at least this long, so the game never sees inhumanly fast taps
-const unsigned long OPPOSITE_KEY_GAP = 50; // ms. The pedals never press W/S or A/D while the opposite key is down or within this long of it being let go (no Snap Tap style switching)
+const unsigned long OPPOSITE_KEY_GAP = 30; // ms. When switching W/S or A/D, the new key waits until the old one is let go plus this long (no Snap Tap style switching)
 const unsigned long KEY_STAGGER_MIN = 10; // ms. Random gap between any two keys the pedals press or release,
 const unsigned long KEY_STAGGER_MAX = 30; // so keys like Shift and W never change in the exact same instant
 const uint8_t sprintKey = KEY_LEFT_SHIFT; 
@@ -49,7 +49,7 @@ const long MIN_KEY_RELEASE_FLOOR = 30;
 Settings settings = DEFAULT_SETTINGS; // Values actually in use
 
 // Layout of the settings saved in EEPROM. The defaults are saved too so changing them in code invalidates the saved settings
-const uint16_t SETTINGS_MAGIC = 0x5049; // Change this if the layout of SavedSettings changes
+const uint16_t SETTINGS_MAGIC = 0x504A; // Change this if the layout of SavedSettings changes
 struct SavedSettings {
   uint16_t magic;
   Settings defaults;
@@ -102,7 +102,7 @@ bool sPressed = false;
 bool dPressed = false;
 bool crouched = false;
 bool moving = false;          // True while pedalling fast enough to move (see settings.stopMovingPercent)
-bool movingForward = true;    // Direction when movement started, only changes once you stop
+bool movingForward = true;    // Direction of movement, changes once the pedals clearly turn the other way
 
 // Movement and sprint keys held down by the pedals
 struct PedalKey {
@@ -131,6 +131,9 @@ bool pedalHolds(uint8_t key){
 const float SPEED_SMOOTHING = 0.3; // 0-1, lower smooths the speed more before looking for a stop
 const float TURN_MARGIN = 0.05; // Speed must move this fraction away from a peak/low to count as a change of direction
 const long TURN_NOISE = 300; // ...plus this many pulses/sec, to ignore encoder noise at low speeds
+const long SMOOTHING_RISE_TIME = 20; // ms. Speeding up only gets this much smoothing, to ignore encoder noise
+const uint8_t REVERSE_CONFIRM_SAMPLES = 6; // Pedalling the other way for this many speed updates (5 ms each) switches direction, without stopping first
+uint8_t reversedSamples = 0;
 const unsigned long STROKE_TIMEOUT = 1500; // ms. If no strokes are seen for this long (very smooth pedalling), compare to the top speed instead
 float smoothSpeed = 0;
 bool speedFalling = false;
@@ -663,9 +666,22 @@ void updateSpeedDirection(){
     unsigned long elapsed = currentTime - lastTime;
     speed = abs(encoderDelta) / (elapsed / 1000.0); // Pulses per second
 
-    // Average out the slow point of each pedal stroke for the move and sprint thresholds
-    float smoothing = elapsed / (float)(settings.smoothingTime + elapsed);
-    movementSpeed += (speed - movementSpeed) * smoothing;
+    // Bridge the slow point of each pedal stroke for the move and sprint thresholds:
+    // follow the speed up straight away, but only let it fall gradually
+    long smoothingTime = speed > movementSpeed ? min(SMOOTHING_RISE_TIME, settings.smoothingTime) : settings.smoothingTime;
+    movementSpeed += (speed - movementSpeed) * (elapsed / (float)(smoothingTime + elapsed));
+
+    // Switch direction once the pedals have clearly turned the other way, even without stopping
+    if (encoderDelta != 0){
+      bool forward = encoderDelta > 0;
+      if (forward == movingForward){
+        reversedSamples = 0;
+      } else if (moving && ++reversedSamples >= REVERSE_CONFIRM_SAMPLES){
+        movingForward = forward;
+        reversedSamples = 0;
+        movementSpeed = speed; // Start the new direction fresh, not with the old direction's speed
+      }
+    }
 
     lastEncoderValue = currentEncoderValue;
     lastTime = currentTime;
@@ -721,6 +737,7 @@ void updateQuickStop(unsigned long currentTime){
   if (settings.quickStop && !quickStopped && speedFalling
       && smoothSpeed < stopReference * (100 - settings.quickStopDrop) / 100.0){
     quickStopped = true; // movementInputs lets go of the movement keys
+    movementSpeed = min(movementSpeed, speed); // So walk/run and the direction catch up with the stop straight away
   }
 }
 
@@ -747,7 +764,9 @@ void updatePedalKey(PedalKey &pedalKey, unsigned long currentTime){
   bool shouldHold = currentTime < pedalKey.lastWanted + unpressInterval; // Allows smooth movement between speed updates
   unsigned long minTime = pedalKey.held ? settings.minKeyHold : settings.minKeyRelease;
   PedalKey* opposite = pedalKey.opposite;
-  bool oppositeTooRecent = opposite != NULL && (opposite->held || currentTime - opposite->changedAt < OPPOSITE_KEY_GAP);
+  // If the opposite key is on its way up, wait until it's let go plus a gap. If you're holding both on purpose, allow it
+  bool oppositeTooRecent = opposite != NULL
+      && ((opposite->held && !opposite->wanted) || (!opposite->held && currentTime - opposite->changedAt < OPPOSITE_KEY_GAP));
   if (shouldHold != pedalKey.held
       && currentTime - pedalKey.changedAt >= minTime
       && currentTime - lastPedalKeyChange >= pedalKeyStagger
@@ -770,7 +789,7 @@ void movementInputs(){
   // Start moving above the walk speed, stop a bit below it so it doesn't flicker
   if (movementSpeed >= settings.walkSpeed){
     if (!moving){
-      movingForward = pedalForward; // Lock the direction so a noisy reading can't flip W to S mid movement
+      movingForward = pedalForward; // After that it only changes once the pedals clearly turn the other way (see updateSpeedDirection)
     }
     moving = true;
   } else if (movementSpeed < settings.walkSpeed * settings.stopMovingPercent / 100.0){
