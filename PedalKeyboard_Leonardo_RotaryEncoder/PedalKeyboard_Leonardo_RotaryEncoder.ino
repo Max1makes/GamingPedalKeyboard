@@ -19,7 +19,7 @@ const bool MOVE_WHEN_NO_INPUT = true; //walk forwards and backwards if pedalling
 const bool REVERSE_FLIPS_KEYS = false; //When pedalling backwards, each movement key you hold presses its opposite (W<->S, A<->D)
 const bool QUICK_STOP = true; //Stop moving as soon as you stop pedalling, instead of when the pedals stop spinning (eg cs2)
 const long QUICK_STOP_DROP = 20; // Stopping is detected when the speed falls this % below the slowest point of the last pedal stroke
-const bool COUNTER_STRAFE = true; // For a moment after the pedals let go of W/A/S/D, pressing W/A/S/D yourself works like a normal keyboard, so you can counter strafe
+const bool COUNTER_STRAFE = false; // For a moment after the pedals let go of W/A/S/D, pressing W/A/S/D yourself works like a normal keyboard, so you can counter strafe
 const long COUNTER_STRAFE_WINDOW = 300; // ms that moment lasts
 const unsigned long COUNTER_STRAFE_MAX = 250; // ms. A key pressed in that moment is let go after this long at most, so you still have to pedal to move
 const long SMOOTHING_TIME = 20; // ms. When you slow down, the speed used for move and sprint falls over about this long, so the slow point of each pedal stroke doesn't stop you. Speeding up is instant. 0 = off
@@ -56,7 +56,7 @@ const long MIN_KEY_RELEASE_FLOOR = 30;
 Settings settings = DEFAULT_SETTINGS; // Values actually in use
 
 // Layout of the settings saved in EEPROM. The defaults are saved too so changing them in code invalidates the saved settings
-const uint16_t SETTINGS_MAGIC = 0x504E; // Change this if the layout of SavedSettings changes
+const uint16_t SETTINGS_MAGIC = 0x504F; // Change this if the layout of SavedSettings changes
 struct SavedSettings {
   uint16_t magic;
   Settings defaults;
