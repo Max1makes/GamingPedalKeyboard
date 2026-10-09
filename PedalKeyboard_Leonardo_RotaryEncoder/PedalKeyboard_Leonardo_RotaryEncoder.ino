@@ -18,11 +18,10 @@ const bool SPRINT_ON_PRESS = false; //True if pressing sprint makes you faster, 
 const bool MOVE_WHEN_NO_INPUT = true; //walk forwards and backwards if pedalling and no keys pressed
 const bool QUICK_STOP = true; //Stop moving as soon as you stop pedalling, instead of when the pedals stop spinning (eg cs2)
 const long QUICK_STOP_DROP = 20; // Stopping is detected when the speed falls this % below the slowest point of the last pedal stroke
-const long QUICK_STOP_BELOW = 9000; // ...and is below this speed, so slowing from a run to a walk doesn't trigger it
 const bool COUNTER_STRAFE = true; // For a moment after the pedals let go of W/A/S/D, pressing W/A/S/D yourself works like a normal keyboard, so you can counter strafe
 const long COUNTER_STRAFE_WINDOW = 300; // ms that moment lasts
 const unsigned long COUNTER_STRAFE_MAX = 250; // ms. A key pressed in that moment is let go after this long at most, so you still have to pedal to move
-const long SMOOTHING_TIME = 150; // ms. When you slow down, the speed used for move and sprint falls over about this long, so the slow point of each pedal stroke doesn't stop you. Speeding up is instant. 0 = off
+const long SMOOTHING_TIME = 20; // ms. When you slow down, the speed used for move and sprint falls over about this long, so the slow point of each pedal stroke doesn't stop you. Speeding up is instant. 0 = off
 const long STOP_MOVING_PERCENT = 75; // Once moving, keep moving until the speed drops below this % of WALK_SPEED, so it doesn't flicker on and off
 const long MIN_KEY_HOLD = 50; // ms. Movement keys pressed by the pedals stay down at least this long...
 const long MIN_KEY_RELEASE = 50; // ms. ...and stay up at least this long, so the game never sees inhumanly fast taps
@@ -41,7 +40,6 @@ struct Settings {
   bool moveWhenNoInput;
   bool quickStop;
   long quickStopDrop;
-  long quickStopBelow;
   bool counterStrafe;
   long counterStrafeWindow;
   long stopMovingPercent;
@@ -50,13 +48,13 @@ struct Settings {
   long smoothingTime;
 };
 const Settings DEFAULT_SETTINGS = {WALK_SPEED, SPRINT_SPEED, STOP_SPRINT_SPEED, SPRINT_ON_PRESS, MOVE_WHEN_NO_INPUT,
-                                   QUICK_STOP, QUICK_STOP_DROP, QUICK_STOP_BELOW, COUNTER_STRAFE, COUNTER_STRAFE_WINDOW, STOP_MOVING_PERCENT, MIN_KEY_HOLD, MIN_KEY_RELEASE, SMOOTHING_TIME};
+                                   QUICK_STOP, QUICK_STOP_DROP, COUNTER_STRAFE, COUNTER_STRAFE_WINDOW, STOP_MOVING_PERCENT, MIN_KEY_HOLD, MIN_KEY_RELEASE, SMOOTHING_TIME};
 const long MIN_KEY_HOLD_FLOOR = 50; // The config app can't set the key times below these, to keep inputs human looking for anticheat
 const long MIN_KEY_RELEASE_FLOOR = 30;
 Settings settings = DEFAULT_SETTINGS; // Values actually in use
 
 // Layout of the settings saved in EEPROM. The defaults are saved too so changing them in code invalidates the saved settings
-const uint16_t SETTINGS_MAGIC = 0x504C; // Change this if the layout of SavedSettings changes
+const uint16_t SETTINGS_MAGIC = 0x504D; // Change this if the layout of SavedSettings changes
 struct SavedSettings {
   uint16_t magic;
   Settings defaults;
@@ -625,7 +623,6 @@ void printSettings(){ // e.g. CFG walk=2000 sprint=16000 stop=9000 sprintOnPress
   Serial.print(F(" moveWhenNoInput=")); Serial.print(settings.moveWhenNoInput);
   Serial.print(F(" quickStop=")); Serial.print(settings.quickStop);
   Serial.print(F(" quickStopDrop=")); Serial.print(settings.quickStopDrop);
-  Serial.print(F(" quickStopBelow=")); Serial.print(settings.quickStopBelow);
   Serial.print(F(" counterStrafe=")); Serial.print(settings.counterStrafe);
   Serial.print(F(" counterStrafeWindow=")); Serial.print(settings.counterStrafeWindow);
   Serial.print(F(" stopMoving=")); Serial.print(settings.stopMovingPercent);
@@ -652,7 +649,6 @@ bool applySetting(const char* name, long value){
     quickStopped = false;
   }
   else if (strcmp(name, "quickStopDrop") == 0) settings.quickStopDrop = min(value, 100L);
-  else if (strcmp(name, "quickStopBelow") == 0) settings.quickStopBelow = value;
   else if (strcmp(name, "counterStrafe") == 0) settings.counterStrafe = value != 0;
   else if (strcmp(name, "counterStrafeWindow") == 0) settings.counterStrafeWindow = min(value, 2000L);
   else if (strcmp(name, "stopMoving") == 0) settings.stopMovingPercent = min(value, 100L);
@@ -788,7 +784,7 @@ void updateQuickStop(unsigned long currentTime){
   }
 
   float stopReference = (currentTime - lastStrokeTime > STROKE_TIMEOUT) ? fallPeak : lastStrokeLow;
-  if (settings.quickStop && !quickStopped && speedFalling && smoothSpeed < settings.quickStopBelow
+  if (settings.quickStop && !quickStopped && speedFalling
       && smoothSpeed < stopReference * (100 - settings.quickStopDrop) / 100.0){
     quickStopped = true; // movementInputs lets go of the movement keys
     movementSpeed = min(movementSpeed, speed); // So walk/run and the direction catch up with the stop straight away

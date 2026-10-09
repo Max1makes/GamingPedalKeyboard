@@ -106,9 +106,11 @@
   .swatch { width: 14px; height: 3px; border-radius: 2px; display: inline-block; }
   .swatch.block { height: 12px; border: 1px solid var(--border); }
   .swatch.dotted { background: none !important; border-top: 3px dotted var(--walk); height: 0; }
-  .swatch.dashed-grey { background: none !important; border-top: 2px dashed var(--text-3); height: 0; }
   .sub { margin-top: 14px; }
-  .sub.off { opacity: 0.45; }
+  #advanced > summary { cursor: pointer; font-weight: 600; }
+  #advanced h3 { font-size: 14px; margin: 18px 0 8px; color: var(--text-2); }
+  #advanced h3:first-of-type { margin-top: 14px; }
+  .off { opacity: 0.45; }
   .check { display: flex; gap: 10px; align-items: center; cursor: pointer; }
   .actions { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
   .warn { color: var(--err-text); font-size: 13px; min-height: 1em; margin: 0 0 8px; }
@@ -150,13 +152,6 @@
     <section class="card">
       <h2>Thresholds</h2>
       <div class="row">
-        <span class="name">Smoothing (ms)</span>
-        <span></span>
-        <input type="range" min="0" max="500" step="10" data-key="smoothing">
-        <input type="number" min="0" max="1000" step="10" data-key="smoothing">
-        <span class="help">When you slow down, the speed falls over about this long, so the slow point of each pedal stroke doesn't stop you or flip sprint. Speeding up is instant. Higher is steadier but slower to slow down. 0 = off.</span>
-      </div>
-      <div class="row">
         <span class="name"><span class="swatch" style="background:var(--walk)"></span>Move</span>
         <span></span>
         <input type="range" min="0" max="35000" step="100" data-key="walk">
@@ -192,7 +187,21 @@
       <h2>Quick stop</h2>
       <label class="check"><input type="checkbox" id="quickStop"> Stop moving as soon as I stop pedalling (e.g. CS2)</label>
       <p class="muted small" style="margin:6px 0 0">Without this you keep moving while the pedals spin down. The shaded areas on the live speed graph show when quick stop kicked in.</p>
-      <div class="sub" id="quickStopOptions">
+    </section>
+
+    <details class="card" id="advanced">
+      <summary>Advanced settings</summary>
+
+      <div class="row" style="margin-top:14px">
+        <span class="name">Smoothing (ms)</span>
+        <span></span>
+        <input type="range" min="0" max="300" step="5" data-key="smoothing">
+        <input type="number" min="0" max="1000" step="5" data-key="smoothing">
+        <span class="help">When you slow down, the speed falls over about this long, so the slow point of each pedal stroke doesn't stop you or flip sprint. Speeding up is instant. Higher is steadier but slower to slow down. 0 = off.</span>
+      </div>
+
+      <h3>Quick stop</h3>
+      <div id="quickStopOptions">
         <div class="row">
           <span class="name">Drop needed (%)</span>
           <span></span>
@@ -200,15 +209,10 @@
           <input type="number" min="1" max="100" step="1" data-key="quickStopDrop">
           <span class="help">How far the speed must drop below the slowest point of your last pedal stroke to count as stopping. Lower stops sooner. Raise it if you stop by mistake while still pedalling.</span>
         </div>
-        <div class="row">
-          <span class="name"><span class="swatch dashed-grey"></span>Only below (pulses/sec)</span>
-          <span></span>
-          <input type="range" min="0" max="35000" step="500" data-key="quickStopBelow">
-          <input type="number" min="0" step="500" data-key="quickStopBelow">
-          <span class="help">Quick stop only kicks in once you're slower than this, so slowing from a run to a walk doesn't stop you. Lower means fewer accidental stops, but stopping from a sprint takes a little longer.</span>
-        </div>
       </div>
-      <label class="check" style="margin-top:14px"><input type="checkbox" id="counterStrafe"> Let me counter-strafe after I stop</label>
+
+      <h3>Counter-strafe</h3>
+      <label class="check"><input type="checkbox" id="counterStrafe"> Let me counter-strafe after I stop</label>
       <p class="muted small" style="margin:6px 0 0">Just after you stop pedalling, W/A/S/D you press yourself work like a normal keyboard (up to 250 ms), so you can tap the opposite key to stop dead.</p>
       <div class="sub" id="counterStrafeOptions">
         <div class="row">
@@ -219,10 +223,8 @@
           <span class="help">How long after the pedals let go of W/A/S/D your own presses go through.</span>
         </div>
       </div>
-    </section>
 
-    <section class="card">
-      <h2>Key timing</h2>
+      <h3>Key timing</h3>
       <div class="row">
         <span class="name">Minimum hold (ms)</span>
         <span></span>
@@ -237,7 +239,7 @@
         <input type="number" min="30" step="10" data-key="minRelease">
         <span class="help">Keys stay up at least this long before the pedals press them again. Can't go below 30 ms.</span>
       </div>
-    </section>
+    </details>
 
     <section class="card">
       <div class="actions">
@@ -260,7 +262,6 @@
       <span><span class="swatch dotted"></span>Stop moving</span>
       <span><span class="swatch" style="background:var(--stop)"></span>Stop sprint</span>
       <span><span class="swatch" style="background:var(--sprint)"></span>Start sprint</span>
-      <span><span class="swatch dashed-grey"></span>Quick stop below</span>
       <span><span class="swatch block" style="background:var(--stopped)"></span>Quick stop</span>
     </div>
   </section>
@@ -385,7 +386,7 @@
   // ---------- Controls ----------
   function currentThresholds() {
     const get = (k) => Number(document.querySelector(`input[type=number][data-key="${k}"]`).value);
-    return { walk: get('walk'), sprint: get('sprint'), stop: get('stop'), stopMoving: get('stopMoving'), quickStopBelow: get('quickStopBelow') };
+    return { walk: get('walk'), sprint: get('sprint'), stop: get('stop'), stopMoving: get('stopMoving') };
   }
 
   function validate() {
@@ -516,11 +517,6 @@
       ctx.strokeStyle = css('--walk');
       const stopMovingAt = y(t.walk * t.stopMoving / 100);
       ctx.beginPath(); ctx.moveTo(pad.l, stopMovingAt); ctx.lineTo(pad.l + pw, stopMovingAt); ctx.stroke();
-      if (settings.quickStop === 1) {
-        ctx.setLineDash([8, 6]); ctx.lineWidth = 1; ctx.strokeStyle = css('--text-3');
-        const quickStopAt = y(Math.min(t.quickStopBelow, yMax));
-        ctx.beginPath(); ctx.moveTo(pad.l, quickStopAt); ctx.lineTo(pad.l + pw, quickStopAt); ctx.stroke();
-      }
       ctx.setLineDash([]);
     }
 
