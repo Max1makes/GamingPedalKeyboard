@@ -21,6 +21,12 @@
     --walk: #1baf7a;
     --stop: #eda100;
     --sprint: #eb6834;
+    --state-sprint: #d93a3a;
+    --state-sprint-text: #ffffff;
+    --state-walk: #eda100;
+    --state-walk-text: #1a1300;
+    --state-still: #1f8a3b;
+    --state-still-text: #ffffff;
     --stopped: rgba(11, 11, 11, 0.08);
     --warn-bg: #fff4d6;
     --warn-text: #6b4a00;
@@ -42,6 +48,12 @@
       --walk: #199e70;
       --stop: #c98500;
       --sprint: #d95926;
+      --state-sprint: #e66767;
+      --state-sprint-text: #1a0b0b;
+      --state-walk: #c98500;
+      --state-walk-text: #140d00;
+      --state-still: #3aa05a;
+      --state-still-text: #06140a;
       --stopped: rgba(240, 239, 236, 0.10);
       --warn-bg: #3a2e0c;
       --warn-text: #f5d58a;
@@ -63,6 +75,12 @@
     --walk: #199e70;
     --stop: #c98500;
     --sprint: #d95926;
+    --state-sprint: #e66767;
+    --state-sprint-text: #1a0b0b;
+    --state-walk: #c98500;
+    --state-walk-text: #140d00;
+    --state-still: #3aa05a;
+    --state-still-text: #06140a;
     --stopped: rgba(240, 239, 236, 0.10);
     --warn-bg: #3a2e0c;
     --warn-text: #f5d58a;
@@ -114,6 +132,11 @@
   .check { display: flex; gap: 10px; align-items: center; cursor: pointer; }
   .actions { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
   .warn { color: var(--err-text); font-size: 13px; min-height: 1em; margin: 0 0 8px; }
+  .livehead { display: flex; align-items: center; gap: 10px; }
+  .state { font-size: 13px; font-weight: 600; padding: 2px 10px; border-radius: 999px; }
+  .state.sprint { background: var(--state-sprint); color: var(--state-sprint-text); }
+  .state.walk { background: var(--state-walk); color: var(--state-walk-text); }
+  .state.still { background: var(--state-still); color: var(--state-still-text); }
   .speedline { display: flex; align-items: baseline; gap: 8px; margin-bottom: 8px; }
   .speedline .value { font-size: 28px; font-weight: 600; font-variant-numeric: tabular-nums; }
   canvas { width: 100%; height: 220px; display: block; }
@@ -256,7 +279,7 @@
   </fieldset>
 
   <section class="card">
-    <h2>Live speed</h2>
+    <h2 class="livehead">Live speed <span id="moveState" class="state hidden" aria-live="polite"></span></h2>
     <div class="speedline"><span class="value" id="speedValue">–</span><span class="muted small">pulses/sec</span></div>
     <canvas id="chart" aria-label="Pedal speed over the last 10 seconds with threshold lines" role="img"></canvas>
     <div class="legend">
@@ -355,9 +378,14 @@
 
   function handleLine(line) {
     if (!line) return;
-    // Speed lines are "0 35000 <smoothed speed> <quick stopped 0/1> <raw speed>" (the first two numbers fix the Serial Plotter's scale)
-    const m = /^0 35000 (-?[\d.]+)(?: ([01]))?(?: (-?[\d.]+))?$/.exec(line);
-    if (m) { addSample(parseFloat(m[1]), m[2] === '1', m[3] === undefined ? null : parseFloat(m[3])); return; }
+    // Speed lines are "0 35000 <smoothed speed> <quick stopped 0/1> <raw speed> <state 0 still/1 walk/2 sprint>"
+    // (the first two numbers fix the Serial Plotter's scale)
+    const m = /^0 35000 (-?[\d.]+)(?: ([01]))?(?: (-?[\d.]+))?(?: ([012]))?$/.exec(line);
+    if (m) {
+      addSample(parseFloat(m[1]), m[2] === '1', m[3] === undefined ? null : parseFloat(m[3]));
+      if (m[4] !== undefined) showState(Number(m[4]));
+      return;
+    }
     if (line.startsWith('CFG ')) { applyCfg(line); }
     log(line);
   }
@@ -446,6 +474,7 @@
       $('settingsFields').disabled = true;
       $('saveState').textContent = '';
       $('speedValue').textContent = '–';
+      showState(null);
       $('oldFirmware').classList.add('hidden');
     }
   }
@@ -462,6 +491,17 @@
   }
 
   // ---------- Live chart ----------
+  const STATES = [['still', 'Still'], ['walk', 'Walk'], ['sprint', 'Sprint']];
+  let shownState = null;
+  function showState(state) {
+    if (state === shownState) return;
+    shownState = state;
+    const el = $('moveState');
+    if (state === null) { el.classList.add('hidden'); return; }
+    el.className = 'state ' + STATES[state][0];
+    el.textContent = STATES[state][1];
+  }
+
   function addSample(v, stopped, raw) {
     const now = performance.now();
     samples.push({ t: now, v, stopped, raw });

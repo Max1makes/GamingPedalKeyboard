@@ -12,13 +12,13 @@
 // These are the defaults. They can also be tuned live (and saved to the Arduino) with ConfigApp/index.html
 // Settings saved from the app are ignored if you change any of these defaults and re-upload
 const long WALK_SPEED = 2000; // Speed at which walk is triggered
-const long SPRINT_SPEED = 16000;//22000; // Speed at which sprint is triggered
-const long STOP_SPRINT_SPEED = 9000;//6000 12000; // Speed must drop below this value to stop sprinting
+const long SPRINT_SPEED = 20000;//22000; // Speed at which sprint is triggered
+const long STOP_SPRINT_SPEED = 12000;//6000 12000; // Speed must drop below this value to stop sprinting
 const bool SPRINT_ON_PRESS = false; //True if pressing sprint makes you faster, false if it makes you slower (eg csgo pressing shift)
 const bool MOVE_WHEN_NO_INPUT = true; //walk forwards and backwards if pedalling and no keys pressed
 const bool REVERSE_FLIPS_KEYS = false; //When pedalling backwards, each movement key you hold presses its opposite (W<->S, A<->D)
 const bool QUICK_STOP = true; //Stop moving as soon as you stop pedalling, instead of when the pedals stop spinning (eg cs2)
-const long QUICK_STOP_DROP = 20; // Stopping is detected when the speed falls this % below the slowest point of the last pedal stroke
+const long QUICK_STOP_DROP = 50; // Stopping is detected when the speed falls this % below the slowest point of the last pedal stroke
 const bool COUNTER_STRAFE = false; // For a moment after the pedals let go of W/A/S/D, pressing W/A/S/D yourself works like a normal keyboard, so you can counter strafe
 const long COUNTER_STRAFE_WINDOW = 300; // ms that moment lasts
 const unsigned long COUNTER_STRAFE_MAX = 250; // ms. A key pressed in that moment is let go after this long at most, so you still have to pedal to move
@@ -705,6 +705,15 @@ void readSerialCommands(){
   }
 }
 
+// What the keys the pedals are holding add up to in game: 0 still, 1 walk, 2 sprint
+int movementState(){
+  if (!(pedalW.held || pedalA.held || pedalS.held || pedalD.held)){
+    return 0;
+  }
+  bool sprinting = settings.sprintOnPress ? pedalSprint.held : !pedalSprint.held; // In walk mode, Shift held means walking
+  return sprinting ? 2 : 1;
+}
+
 void updateSpeedDirection(){
   // Calculate speed and direction every 100 ms
   unsigned long currentTime = millis();
@@ -753,7 +762,10 @@ void updateSpeedDirection(){
     Serial.print(F(" "));
     Serial.print(quickStopped); // 1 while quick stop has released the movement keys
     Serial.print(F(" "));
-    Serial.println(speed); // Unsmoothed
+    Serial.print(speed); // Unsmoothed
+    Serial.print(F(" "));
+    Serial.println(movementState()); // 0 still, 1 walk, 2 sprint
+
   
     //Serial.print(F(" pulses/sec, Forward: "));
     //Serial.println(pedalForward);
