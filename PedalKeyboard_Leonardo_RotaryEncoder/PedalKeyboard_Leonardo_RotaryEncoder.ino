@@ -18,6 +18,7 @@ const bool SPRINT_ON_PRESS = false; //True if pressing sprint makes you faster, 
 const bool MOVE_WHEN_NO_INPUT = true; //walk forwards and backwards if pedalling and no keys pressed
 const bool QUICK_STOP = false; //Stop moving as soon as you stop pedalling, instead of when the pedals stop spinning (eg cs2)
 const long QUICK_STOP_DROP = 15; // Stopping is detected when the speed falls this % below the slowest point of the last pedal stroke
+const long SMOOTHING_TIME = 150; // ms. Move and sprint use the speed averaged over about this long, so the slow point of each pedal stroke doesn't stop you. 0 = off
 const long STOP_MOVING_PERCENT = 75; // Once moving, keep moving until the speed drops below this % of WALK_SPEED, so it doesn't flicker on and off
 const long MIN_KEY_HOLD = 100; // ms. Movement keys pressed by the pedals stay down at least this long...
 const long MIN_KEY_RELEASE = 50; // ms. ...and stay up at least this long, so the game never sees inhumanly fast taps
@@ -39,15 +40,16 @@ struct Settings {
   long stopMovingPercent;
   long minKeyHold;
   long minKeyRelease;
+  long smoothingTime;
 };
 const Settings DEFAULT_SETTINGS = {WALK_SPEED, SPRINT_SPEED, STOP_SPRINT_SPEED, SPRINT_ON_PRESS, MOVE_WHEN_NO_INPUT,
-                                   QUICK_STOP, QUICK_STOP_DROP, STOP_MOVING_PERCENT, MIN_KEY_HOLD, MIN_KEY_RELEASE};
+                                   QUICK_STOP, QUICK_STOP_DROP, STOP_MOVING_PERCENT, MIN_KEY_HOLD, MIN_KEY_RELEASE, SMOOTHING_TIME};
 const long MIN_KEY_HOLD_FLOOR = 50; // The config app can't set the key times below these, to keep inputs human looking for anticheat
 const long MIN_KEY_RELEASE_FLOOR = 30;
 Settings settings = DEFAULT_SETTINGS; // Values actually in use
 
 // Layout of the settings saved in EEPROM. The defaults are saved too so changing them in code invalidates the saved settings
-const uint16_t SETTINGS_MAGIC = 0x5048; // Change this if the layout of SavedSettings changes
+const uint16_t SETTINGS_MAGIC = 0x5049; // Change this if the layout of SavedSettings changes
 struct SavedSettings {
   uint16_t magic;
   Settings defaults;
@@ -84,6 +86,7 @@ volatile long encoderValue = 0;
 long lastEncoderValue = 0;
 unsigned long lastTime = 0; // Last time the speed was calculated
 float speed = 0;            // Speed of rotation
+float movementSpeed = 0;    // Smoothed speed, used for the move and sprint thresholds
 bool pedalForward = true;      // Direction of rotation, true if pedalling forwards
 
 
@@ -575,6 +578,7 @@ void printSettings(){ // e.g. CFG walk=2000 sprint=16000 stop=9000 sprintOnPress
   Serial.print(F(" stopMoving=")); Serial.print(settings.stopMovingPercent);
   Serial.print(F(" minHold=")); Serial.print(settings.minKeyHold);
   Serial.print(F(" minRelease=")); Serial.print(settings.minKeyRelease);
+  Serial.print(F(" smoothing=")); Serial.print(settings.smoothingTime);
   Serial.print(F(" saved=")); Serial.println(settingsSaved);
 }
 
@@ -598,6 +602,7 @@ bool applySetting(const char* name, long value){
   else if (strcmp(name, "stopMoving") == 0) settings.stopMovingPercent = min(value, 100L);
   else if (strcmp(name, "minHold") == 0) settings.minKeyHold = max(value, MIN_KEY_HOLD_FLOOR);
   else if (strcmp(name, "minRelease") == 0) settings.minKeyRelease = max(value, MIN_KEY_RELEASE_FLOOR);
+  else if (strcmp(name, "smoothing") == 0) settings.smoothingTime = min(value, 1000L);
   else return false;
   settingsSaved = false;
   return true;
@@ -649,12 +654,20 @@ void updateSpeedDirection(){
   unsigned long currentTime = millis();
   if (currentTime - lastTime >= timerInterval)
   {
-    long encoderDelta = encoderValue - lastEncoderValue;
+    noInterrupts(); // encoderValue is 4 bytes, so the encoder interrupt could change it halfway through reading it
+    long currentEncoderValue = encoderValue;
+    interrupts();
+    long encoderDelta = currentEncoderValue - lastEncoderValue;
     pedalForward = (encoderDelta > 0) ? true : (encoderDelta < 0) ? false : true; //defualt to forward
 
-    speed = abs(encoderDelta) / ((currentTime - lastTime) / 1000.0); // Pulses per second
+    unsigned long elapsed = currentTime - lastTime;
+    speed = abs(encoderDelta) / (elapsed / 1000.0); // Pulses per second
 
-    lastEncoderValue = encoderValue;
+    // Average out the slow point of each pedal stroke for the move and sprint thresholds
+    float smoothing = elapsed / (float)(settings.smoothingTime + elapsed);
+    movementSpeed += (speed - movementSpeed) * smoothing;
+
+    lastEncoderValue = currentEncoderValue;
     lastTime = currentTime;
 
     updateQuickStop(currentTime);
@@ -667,9 +680,11 @@ void updateSpeedDirection(){
     Serial.print(35000); // To freeze the upper limit
     
     Serial.print(F(" "));
-    Serial.print(speed);
+    Serial.print(movementSpeed);
     Serial.print(F(" "));
-    Serial.println(quickStopped); // 1 while quick stop has released the movement keys
+    Serial.print(quickStopped); // 1 while quick stop has released the movement keys
+    Serial.print(F(" "));
+    Serial.println(speed); // Unsmoothed
   
     //Serial.print(F(" pulses/sec, Forward: "));
     //Serial.println(pedalForward);
@@ -753,12 +768,12 @@ void movementInputs(){
   unsigned long currentTime = millis();
 
   // Start moving above the walk speed, stop a bit below it so it doesn't flicker
-  if (speed >= settings.walkSpeed){
+  if (movementSpeed >= settings.walkSpeed){
     if (!moving){
       movingForward = pedalForward; // Lock the direction so a noisy reading can't flip W to S mid movement
     }
     moving = true;
-  } else if (speed < settings.walkSpeed * settings.stopMovingPercent / 100.0){
+  } else if (movementSpeed < settings.walkSpeed * settings.stopMovingPercent / 100.0){
     moving = false;
   }
 
@@ -766,11 +781,11 @@ void movementInputs(){
   bool sprintWanted;
   if (settings.sprintOnPress){
     // Pressed to go faster
-    sprintWanted = speed >= settings.sprintSpeed || (pedalSprint.held && speed >= settings.stopSprintSpeed);
+    sprintWanted = movementSpeed >= settings.sprintSpeed || (pedalSprint.held && movementSpeed >= settings.stopSprintSpeed);
   } else{
     // Pressed to walk, released to go faster
     //!crouched fixes bug where you cannot walk left while croud in valorant if you let go and re press "a"
-    sprintWanted = moving && !crouched && (speed <= settings.stopSprintSpeed || (pedalSprint.held && speed <= settings.sprintSpeed));
+    sprintWanted = moving && !crouched && (movementSpeed <= settings.stopSprintSpeed || (pedalSprint.held && movementSpeed <= settings.sprintSpeed));
   }
   pedalSprint.wanted = sprintWanted;
 

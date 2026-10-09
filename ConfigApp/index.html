@@ -17,6 +17,7 @@
     --accent-text: #ffffff;
     --grid: #e6e5e0;
     --speed: #2a78d6;
+    --speed-raw: rgba(42, 120, 214, 0.3);
     --walk: #1baf7a;
     --stop: #eda100;
     --sprint: #eb6834;
@@ -37,6 +38,7 @@
       --accent: #3987e5;
       --grid: #2a2a27;
       --speed: #3987e5;
+      --speed-raw: rgba(57, 135, 229, 0.35);
       --walk: #199e70;
       --stop: #c98500;
       --sprint: #d95926;
@@ -57,6 +59,7 @@
     --accent: #3987e5;
     --grid: #2a2a27;
     --speed: #3987e5;
+    --speed-raw: rgba(57, 135, 229, 0.35);
     --walk: #199e70;
     --stop: #c98500;
     --sprint: #d95926;
@@ -146,6 +149,13 @@
     <section class="card">
       <h2>Thresholds</h2>
       <div class="row">
+        <span class="name">Smoothing (ms)</span>
+        <span></span>
+        <input type="range" min="0" max="500" step="10" data-key="smoothing">
+        <input type="number" min="0" max="1000" step="10" data-key="smoothing">
+        <span class="help">Averages the speed over about this long before comparing it to the thresholds, so the slow point of each pedal stroke doesn't stop you or flip sprint. Higher is steadier but slower to start moving. 0 = off.</span>
+      </div>
+      <div class="row">
         <span class="name"><span class="swatch" style="background:var(--walk)"></span>Move</span>
         <span></span>
         <input type="range" min="0" max="35000" step="100" data-key="walk">
@@ -225,7 +235,8 @@
     <div class="speedline"><span class="value" id="speedValue">–</span><span class="muted small">pulses/sec</span></div>
     <canvas id="chart" aria-label="Pedal speed over the last 10 seconds with threshold lines" role="img"></canvas>
     <div class="legend">
-      <span><span class="swatch" style="background:var(--speed)"></span>Speed</span>
+      <span><span class="swatch" style="background:var(--speed)"></span>Smoothed speed</span>
+      <span><span class="swatch" style="background:var(--speed-raw)"></span>Raw speed</span>
       <span><span class="swatch" style="background:var(--walk)"></span>Move</span>
       <span><span class="swatch dotted"></span>Stop moving</span>
       <span><span class="swatch" style="background:var(--stop)"></span>Stop sprint</span>
@@ -319,9 +330,9 @@
 
   function handleLine(line) {
     if (!line) return;
-    // Speed lines are "0 35000 <speed> <quick stopped 0/1>" (the first two numbers fix the Serial Plotter's scale)
-    const m = /^0 35000 (-?[\d.]+)(?: ([01]))?$/.exec(line);
-    if (m) { addSample(parseFloat(m[1]), m[2] === '1'); return; }
+    // Speed lines are "0 35000 <smoothed speed> <quick stopped 0/1> <raw speed>" (the first two numbers fix the Serial Plotter's scale)
+    const m = /^0 35000 (-?[\d.]+)(?: ([01]))?(?: (-?[\d.]+))?$/.exec(line);
+    if (m) { addSample(parseFloat(m[1]), m[2] === '1', m[3] === undefined ? null : parseFloat(m[3])); return; }
     if (line.startsWith('CFG ')) { applyCfg(line); }
     log(line);
   }
@@ -421,9 +432,9 @@
   }
 
   // ---------- Live chart ----------
-  function addSample(v, stopped) {
+  function addSample(v, stopped, raw) {
     const now = performance.now();
-    samples.push({ t: now, v, stopped });
+    samples.push({ t: now, v, stopped, raw });
     while (samples.length && samples[0].t < now - HISTORY_MS) samples.shift();
   }
 
@@ -443,7 +454,7 @@
     const pad = { l: 48, r: 8, t: 8, b: 8 };
     const pw = w - pad.l - pad.r, ph = h - pad.t - pad.b;
     const t = currentThresholds();
-    const peak = samples.reduce((m, s) => Math.max(m, s.v), 0);
+    const peak = samples.reduce((m, s) => Math.max(m, s.v, s.raw ?? 0), 0);
     const yMax = Math.max(PLOT_MAX, t.walk, t.stop, t.sprint, peak) * 1.05;
     const y = (v) => pad.t + ph - (v / yMax) * ph;
     const now = performance.now();
@@ -483,6 +494,14 @@
       const stopMovingAt = y(t.walk * t.stopMoving / 100);
       ctx.beginPath(); ctx.moveTo(pad.l, stopMovingAt); ctx.lineTo(pad.l + pw, stopMovingAt); ctx.stroke();
       ctx.setLineDash([]);
+    }
+
+    // Raw speed (faint) behind the smoothed speed the thresholds use
+    if (samples.length > 1 && samples[samples.length - 1].raw !== null) {
+      ctx.strokeStyle = css('--speed-raw'); ctx.lineWidth = 1; ctx.lineJoin = 'round';
+      ctx.beginPath();
+      samples.forEach((s, i) => (i ? ctx.lineTo(x(s.t), y(s.raw)) : ctx.moveTo(x(s.t), y(s.raw))));
+      ctx.stroke();
     }
 
     // Speed line
