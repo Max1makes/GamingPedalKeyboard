@@ -18,7 +18,9 @@ const bool SPRINT_ON_PRESS = false; //True if pressing sprint makes you faster, 
 const bool MOVE_WHEN_NO_INPUT = true; //walk forwards and backwards if pedalling and no keys pressed
 const bool QUICK_STOP = false; //Stop moving as soon as you stop pedalling, instead of when the pedals stop spinning (eg cs2)
 const long QUICK_STOP_DROP = 15; // Stopping is detected when the speed falls this % below the slowest point of the last pedal stroke
-const long COUNTER_STRAFE_TIME = 0; // ms to tap the opposite movement key when quick stopping, 0 = off (eg cs2 counter strafe)
+const long STOP_MOVING_PERCENT = 75; // Once moving, keep moving until the speed drops below this % of WALK_SPEED, so it doesn't flicker on and off
+const unsigned long MIN_KEY_HOLD = 100; // ms. Movement keys pressed by the pedals stay down at least this long...
+const unsigned long MIN_KEY_RELEASE = 50; // ms. ...and stay up at least this long, so the game never sees inhumanly fast taps
 const uint8_t sprintKey = KEY_LEFT_SHIFT; 
 //---------------------------------------
 
@@ -31,14 +33,13 @@ struct Settings {
   bool moveWhenNoInput;
   bool quickStop;
   long quickStopDrop;
-  long counterStrafeTime;
 };
 const Settings DEFAULT_SETTINGS = {WALK_SPEED, SPRINT_SPEED, STOP_SPRINT_SPEED, SPRINT_ON_PRESS, MOVE_WHEN_NO_INPUT,
-                                   QUICK_STOP, QUICK_STOP_DROP, COUNTER_STRAFE_TIME};
+                                   QUICK_STOP, QUICK_STOP_DROP};
 Settings settings = DEFAULT_SETTINGS; // Values actually in use
 
 // Layout of the settings saved in EEPROM. The defaults are saved too so changing them in code invalidates the saved settings
-const uint16_t SETTINGS_MAGIC = 0x5046; // Change this if the layout of SavedSettings changes
+const uint16_t SETTINGS_MAGIC = 0x5047; // Change this if the layout of SavedSettings changes
 struct SavedSettings {
   uint16_t magic;
   Settings defaults;
@@ -89,6 +90,25 @@ bool aPressed = false;
 bool sPressed = false;
 bool dPressed = false;
 bool crouched = false;
+bool moving = false;          // True while pedalling fast enough to move (see STOP_MOVING_PERCENT)
+bool movingForward = true;    // Direction when movement started, only changes once you stop
+
+// Movement and sprint keys held down by the pedals
+struct PedalKey {
+  uint8_t key;
+  bool held;                  // True while the pedals are holding this key down
+  unsigned long lastWanted;   // Last time the pedals wanted it down
+  unsigned long changedAt;    // When the pedals last pressed or released it
+};
+PedalKey pedalW = {'w', false, 0, 0};
+PedalKey pedalA = {'a', false, 0, 0};
+PedalKey pedalS = {'s', false, 0, 0};
+PedalKey pedalD = {'d', false, 0, 0};
+PedalKey pedalSprint = {sprintKey, false, 0, 0};
+
+bool pedalHolds(uint8_t key){
+  return (key == WKey && pedalW.held) || (key == AKey && pedalA.held) || (key == SKey && pedalS.held) || (key == DKey && pedalD.held);
+}
 
 //_____Quick_Stop_Stuff_____
 const float SPEED_SMOOTHING = 0.3; // 0-1, lower smooths the speed more before looking for a stop
@@ -102,20 +122,10 @@ float lastStrokeLow = 0;      // Slowest point between the last two pedal pushes
 unsigned long lastStrokeTime = 0;
 float fallPeak = 0;           // Speed when it started falling
 bool quickStopped = false;    // True while the pedals are only spinning from momentum
-unsigned long counterStrafeEnd = 0;
-bool counterW = false;
-bool counterA = false;
-bool counterS = false;
-bool counterD = false;
 
 //_____Keyboard_Stuff_____
 const unsigned long timerInterval = 5; // Speed update every timerInterval ms
 const unsigned long unpressInterval = 2 * timerInterval; // Allows smooth movement if its bigger than timer interval
-unsigned long lastWInput = 0;
-unsigned long lastAInput = 0;
-unsigned long lastSInput = 0;
-unsigned long lastDInput = 0;
-unsigned long lastSprintInput = 0;
 
 
 class KbdRptParser : public KeyboardReportParser
@@ -211,6 +221,9 @@ void KbdRptParser::OnKeyUp(uint8_t mod, uint8_t key){
           dPressed = false;
           break;
   }
+  if (pedalHolds(key)){
+    return; // The pedals are still holding it, releasing it here would make it blip off and on
+  }
   uint8_t c = OemToAscii(mod, key);
   if (key == EnterCode){
     Serial.println("ENTER OVERRIDE"); //Enter key was being picked up as an ascii one
@@ -254,7 +267,9 @@ void KbdRptParser::OnControlKeysChanged(uint8_t before, uint8_t after) {
     }
     if (beforeMod.bmLeftShift == 1 && afterMod.bmLeftShift == 0) {
         Serial.println("LeftShift released");
-        Keyboard.release(KEY_LEFT_SHIFT);
+        if (!(sprintKey == KEY_LEFT_SHIFT && pedalSprint.held)){ // Don't blip it if the pedals are holding it
+          Keyboard.release(KEY_LEFT_SHIFT);
+        }
     }
 
     if (beforeMod.bmLeftAlt == 0 && afterMod.bmLeftAlt == 1) {
@@ -538,7 +553,6 @@ void printSettings(){ // e.g. CFG walk=2000 sprint=16000 stop=9000 sprintOnPress
   Serial.print(F(" moveWhenNoInput=")); Serial.print(settings.moveWhenNoInput);
   Serial.print(F(" quickStop=")); Serial.print(settings.quickStop);
   Serial.print(F(" quickStopDrop=")); Serial.print(settings.quickStopDrop);
-  Serial.print(F(" counterStrafe=")); Serial.print(settings.counterStrafeTime);
   Serial.print(F(" saved=")); Serial.println(settingsSaved);
 }
 
@@ -559,7 +573,6 @@ bool applySetting(const char* name, long value){
     quickStopped = false;
   }
   else if (strcmp(name, "quickStopDrop") == 0) settings.quickStopDrop = min(value, 100L);
-  else if (strcmp(name, "counterStrafe") == 0) settings.counterStrafeTime = value;
   else return false;
   settingsSaved = false;
   return true;
@@ -650,10 +663,7 @@ void updateQuickStop(unsigned long currentTime){
       lastStrokeTime = currentTime;
       speedFalling = false;
       speedExtreme = smoothSpeed;
-      if (quickStopped){
-        quickStopped = false;
-        counterStrafeEnd = currentTime; // Stop any counter strafe so it doesn't fight the new movement
-      }
+      quickStopped = false;
       return;
     }
     speedExtreme = min(speedExtreme, smoothSpeed);
@@ -670,17 +680,7 @@ void updateQuickStop(unsigned long currentTime){
   float stopReference = (currentTime - lastStrokeTime > STROKE_TIMEOUT) ? fallPeak : lastStrokeLow;
   if (settings.quickStop && !quickStopped && speedFalling
       && smoothSpeed < stopReference * (100 - settings.quickStopDrop) / 100.0){
-    quickStopped = true;
-    // Let go of the movement keys now instead of waiting for them to time out, and remember the opposite keys for the counter strafe
-    counterW = currentTime < lastSInput + unpressInterval;
-    counterA = currentTime < lastDInput + unpressInterval;
-    counterS = currentTime < lastWInput + unpressInterval;
-    counterD = currentTime < lastAInput + unpressInterval;
-    Keyboard.release('w'); lastWInput = 0;
-    Keyboard.release('a'); lastAInput = 0;
-    Keyboard.release('s'); lastSInput = 0;
-    Keyboard.release('d'); lastDInput = 0;
-    counterStrafeEnd = currentTime + settings.counterStrafeTime;
+    quickStopped = true; // movementInputs lets go of the movement keys
   }
 }
 
@@ -699,133 +699,56 @@ void updateEncoder(){
   lastEncoded = encoded; // store this value for next time
 }
 
+// Presses or releases a movement key for the pedals, keeping it down for at least MIN_KEY_HOLD and up for at least MIN_KEY_RELEASE
+void updatePedalKey(PedalKey &pedalKey, bool wanted, unsigned long currentTime){
+  if (wanted){
+    pedalKey.lastWanted = currentTime;
+  }
+  bool shouldHold = currentTime < pedalKey.lastWanted + unpressInterval; // Allows smooth movement between speed updates
+  unsigned long minTime = pedalKey.held ? MIN_KEY_HOLD : MIN_KEY_RELEASE;
+  if (shouldHold != pedalKey.held && currentTime - pedalKey.changedAt >= minTime){
+    pedalKey.held = shouldHold;
+    pedalKey.changedAt = currentTime;
+  }
+  if (pedalKey.held){
+    Keyboard.press(pedalKey.key);
+  } else{
+    Keyboard.release(pedalKey.key); // Also ends the short tap from pressing the key without pedalling
+  }
+}
+
 void movementInputs(){
-  /*
-  Keyboard.release('w');
-  Keyboard.release('a');
-  Keyboard.release('s');
-  Keyboard.release('d');
-  */
   unsigned long currentTime = millis();
 
-  //Release keys if time is over
-  if (currentTime >= (lastSprintInput + unpressInterval)) {
-    Keyboard.release(sprintKey);
-  }
-  if (currentTime >= (lastWInput + unpressInterval)) {
-    Keyboard.release('w');
-  }
-  if (currentTime >= (lastAInput + unpressInterval)) {
-    Keyboard.release('a');
-  }
-  if (currentTime >= (lastSInput + unpressInterval)) {
-    Keyboard.release('s');
-  }
-  if (currentTime >= (lastDInput + unpressInterval)) {
-    Keyboard.release('d');
+  // Start moving above the walk speed, stop a bit below it so it doesn't flicker
+  if (speed >= settings.walkSpeed){
+    if (!moving){
+      movingForward = pedalForward; // Lock the direction so a noisy reading can't flip W to S mid movement
+    }
+    moving = true;
+  } else if (speed < settings.walkSpeed * STOP_MOVING_PERCENT / 100){
+    moving = false;
   }
 
-  //Quick stop counter strafe: hold the opposite keys for a moment
-  if (quickStopped && currentTime < counterStrafeEnd){
-    if (counterW){ Keyboard.press('w'); lastWInput = currentTime; }
-    if (counterA){ Keyboard.press('a'); lastAInput = currentTime; }
-    if (counterS){ Keyboard.press('s'); lastSInput = currentTime; }
-    if (counterD){ Keyboard.press('d'); lastDInput = currentTime; }
-  }
-
-  //Extend time if still pressed and pedal fast enough
+  // Sprint key. Once pressed it stays pressed until the speed passes the other threshold, so it doesn't flicker
+  bool sprintWanted;
   if (settings.sprintOnPress){
-    if (speed >= settings.sprintSpeed) {
-      Keyboard.press(sprintKey);
-      lastSprintInput = currentTime;
-    }
-    else if (speed >= settings.stopSprintSpeed){
-      lastSprintInput = currentTime;
-    }
-
+    // Pressed to go faster
+    sprintWanted = speed >= settings.sprintSpeed || (pedalSprint.held && speed >= settings.stopSprintSpeed);
   } else{
-    /* Debugging sprint behaviour
-    Serial.println("Speed: "); Serial.println(speed);
-    Serial.print("STOP_SPRINT_SPEED: "); Serial.println(settings.stopSprintSpeed);
-    Serial.print("SPRINT_SPEED: "); Serial.println(settings.sprintSpeed);
-    Serial.print("WALK_SPEED: "); Serial.println(settings.walkSpeed);
-    */
-    if (speed <= settings.stopSprintSpeed) {
-      if (speed >= settings.walkSpeed){
-        if (!(crouched)){//fixes bug where you cannot walk left while croud in valorant if you let go and re press "a"
-          Keyboard.press(sprintKey); //pressing this to walk
-          lastSprintInput = currentTime;
-        }
-      }
-    }
-    else if (speed <= settings.sprintSpeed){
-      if (speed >= settings.walkSpeed){
-        //Keyboard.press(sprintKey); //pressing this to walk
-        if (!(crouched)){
-          lastSprintInput = currentTime;
-        }
-      }
-    }
-    else{
-      Serial.println("What");
-    } 
+    // Pressed to walk, released to go faster
+    //!crouched fixes bug where you cannot walk left while croud in valorant if you let go and re press "a"
+    sprintWanted = moving && !crouched && (speed <= settings.stopSprintSpeed || (pedalSprint.held && speed <= settings.sprintSpeed));
   }
+  updatePedalKey(pedalSprint, sprintWanted, currentTime);
 
-  if (speed >= settings.walkSpeed && !quickStopped){
-    if (pedalForward){
-      if (wPressed){
-        Keyboard.press('w');
-        lastWInput = currentTime;
-      }
-      if (aPressed){
-        Keyboard.press('a');
-        lastAInput = currentTime;
-      }
-      if (sPressed){
-        Keyboard.press('s');
-        lastSInput = currentTime;
-      }
-      if (dPressed){
-        Keyboard.press('d');
-        lastDInput = currentTime;
-      }
-
-      if (!(wPressed || aPressed || sPressed || dPressed)){
-        if (settings.moveWhenNoInput){
-          Keyboard.press('w');
-          lastWInput = currentTime;
-        }
-      }
-
-    } else{
-    //press opposite key if pedalling backward
-      if (wPressed){
-        Keyboard.press('w');
-        lastWInput = currentTime;
-      }
-      if (aPressed){
-        Keyboard.press('a');
-        lastAInput = currentTime;
-      }
-      if (sPressed){
-        Keyboard.press('s');
-        lastSInput = currentTime;
-      }
-      if (dPressed){
-        Keyboard.press('d');
-        lastDInput = currentTime;
-      }
-
-      if (!(wPressed || aPressed || sPressed || dPressed)){
-        if (settings.moveWhenNoInput){
-          Keyboard.press('s');
-          lastSInput = currentTime;
-        }
-      }
-
-    }
-  }
-
+  // Hold the keys you're pressing while pedalling. With no keys pressed, go forwards or backwards with the pedals
+  bool move = moving && !quickStopped;
+  bool autoMove = move && settings.moveWhenNoInput && !(wPressed || aPressed || sPressed || dPressed);
+  updatePedalKey(pedalW, (move && wPressed) || (autoMove && movingForward), currentTime);
+  updatePedalKey(pedalA, move && aPressed, currentTime);
+  updatePedalKey(pedalS, (move && sPressed) || (autoMove && !movingForward), currentTime);
+  updatePedalKey(pedalD, move && dPressed, currentTime);
 }
 
 void loop()
