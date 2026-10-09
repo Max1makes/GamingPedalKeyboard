@@ -21,6 +21,9 @@ const long QUICK_STOP_DROP = 15; // Stopping is detected when the speed falls th
 const long STOP_MOVING_PERCENT = 75; // Once moving, keep moving until the speed drops below this % of WALK_SPEED, so it doesn't flicker on and off
 const long MIN_KEY_HOLD = 100; // ms. Movement keys pressed by the pedals stay down at least this long...
 const long MIN_KEY_RELEASE = 50; // ms. ...and stay up at least this long, so the game never sees inhumanly fast taps
+const unsigned long OPPOSITE_KEY_GAP = 50; // ms. The pedals never press W/S or A/D while the opposite key is down or within this long of it being let go (no Snap Tap style switching)
+const unsigned long KEY_STAGGER_MIN = 10; // ms. Random gap between any two keys the pedals press or release,
+const unsigned long KEY_STAGGER_MAX = 30; // so keys like Shift and W never change in the exact same instant
 const uint8_t sprintKey = KEY_LEFT_SHIFT; 
 //---------------------------------------
 
@@ -104,12 +107,18 @@ struct PedalKey {
   bool held;                  // True while the pedals are holding this key down
   unsigned long lastWanted;   // Last time the pedals wanted it down
   unsigned long changedAt;    // When the pedals last pressed or released it
+  bool wanted;                // Set by movementInputs each loop
+  PedalKey* opposite;         // W<->S, A<->D, set in setup
 };
-PedalKey pedalW = {'w', false, 0, 0};
-PedalKey pedalA = {'a', false, 0, 0};
-PedalKey pedalS = {'s', false, 0, 0};
-PedalKey pedalD = {'d', false, 0, 0};
-PedalKey pedalSprint = {sprintKey, false, 0, 0};
+PedalKey pedalW = {'w', false, 0, 0, false, NULL};
+PedalKey pedalA = {'a', false, 0, 0, false, NULL};
+PedalKey pedalS = {'s', false, 0, 0, false, NULL};
+PedalKey pedalD = {'d', false, 0, 0, false, NULL};
+PedalKey pedalSprint = {sprintKey, false, 0, 0, false, NULL};
+PedalKey* const pedalKeys[] = {&pedalSprint, &pedalW, &pedalA, &pedalS, &pedalD};
+const uint8_t pedalKeyCount = sizeof(pedalKeys) / sizeof(pedalKeys[0]);
+unsigned long lastPedalKeyChange = 0; // When the pedals last pressed or released any key
+unsigned long pedalKeyStagger = 0;    // Random gap needed before the next change
 
 bool pedalHolds(uint8_t key){
   return (key == WKey && pedalW.held) || (key == AKey && pedalA.held) || (key == SKey && pedalS.held) || (key == DKey && pedalD.held);
@@ -523,6 +532,11 @@ void setup(){
   attachInterrupt(digitalPinToInterrupt(encoder_Pin_1), updateEncoder, CHANGE);
   attachInterrupt(digitalPinToInterrupt(encoder_Pin_2), updateEncoder, CHANGE);
   lastTime = millis();
+  randomSeed(analogRead(A0) ^ micros()); // A0 is unconnected, so it reads noise
+  pedalW.opposite = &pedalS;
+  pedalS.opposite = &pedalW;
+  pedalA.opposite = &pedalD;
+  pedalD.opposite = &pedalA;
 
   loadSettings();
 
@@ -710,16 +724,23 @@ void updateEncoder(){
   lastEncoded = encoded; // store this value for next time
 }
 
-// Presses or releases a movement key for the pedals, keeping it down for at least settings.minKeyHold and up for at least settings.minKeyRelease
-void updatePedalKey(PedalKey &pedalKey, bool wanted, unsigned long currentTime){
-  if (wanted){
+// Presses or releases a key for the pedals, keeping it down for at least settings.minKeyHold and up for at least settings.minKeyRelease
+void updatePedalKey(PedalKey &pedalKey, unsigned long currentTime){
+  if (pedalKey.wanted){
     pedalKey.lastWanted = currentTime;
   }
   bool shouldHold = currentTime < pedalKey.lastWanted + unpressInterval; // Allows smooth movement between speed updates
   unsigned long minTime = pedalKey.held ? settings.minKeyHold : settings.minKeyRelease;
-  if (shouldHold != pedalKey.held && currentTime - pedalKey.changedAt >= minTime){
+  PedalKey* opposite = pedalKey.opposite;
+  bool oppositeTooRecent = opposite != NULL && (opposite->held || currentTime - opposite->changedAt < OPPOSITE_KEY_GAP);
+  if (shouldHold != pedalKey.held
+      && currentTime - pedalKey.changedAt >= minTime
+      && currentTime - lastPedalKeyChange >= pedalKeyStagger
+      && !(shouldHold && oppositeTooRecent)){
     pedalKey.held = shouldHold;
     pedalKey.changedAt = currentTime;
+    lastPedalKeyChange = currentTime;
+    pedalKeyStagger = random(KEY_STAGGER_MIN, KEY_STAGGER_MAX + 1);
   }
   if (pedalKey.held){
     Keyboard.press(pedalKey.key);
@@ -751,15 +772,26 @@ void movementInputs(){
     //!crouched fixes bug where you cannot walk left while croud in valorant if you let go and re press "a"
     sprintWanted = moving && !crouched && (speed <= settings.stopSprintSpeed || (pedalSprint.held && speed <= settings.sprintSpeed));
   }
-  updatePedalKey(pedalSprint, sprintWanted, currentTime);
+  pedalSprint.wanted = sprintWanted;
 
   // Hold the keys you're pressing while pedalling. With no keys pressed, go forwards or backwards with the pedals
   bool move = moving && !quickStopped;
   bool autoMove = move && settings.moveWhenNoInput && !(wPressed || aPressed || sPressed || dPressed);
-  updatePedalKey(pedalW, (move && wPressed) || (autoMove && movingForward), currentTime);
-  updatePedalKey(pedalA, move && aPressed, currentTime);
-  updatePedalKey(pedalS, (move && sPressed) || (autoMove && !movingForward), currentTime);
-  updatePedalKey(pedalD, move && dPressed, currentTime);
+  pedalW.wanted = (move && wPressed) || (autoMove && movingForward);
+  pedalA.wanted = move && aPressed;
+  pedalS.wanted = (move && sPressed) || (autoMove && !movingForward);
+  pedalD.wanted = move && dPressed;
+
+  // Shuffle the order, so when two keys change together neither always goes first
+  uint8_t order[pedalKeyCount];
+  for (uint8_t i = 0; i < pedalKeyCount; i++){
+    uint8_t j = random(i + 1);
+    order[i] = order[j];
+    order[j] = i;
+  }
+  for (uint8_t i = 0; i < pedalKeyCount; i++){
+    updatePedalKey(*pedalKeys[order[i]], currentTime);
+  }
 }
 
 void loop()
