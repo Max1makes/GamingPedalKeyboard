@@ -106,6 +106,7 @@
   .swatch { width: 14px; height: 3px; border-radius: 2px; display: inline-block; }
   .swatch.block { height: 12px; border: 1px solid var(--border); }
   .swatch.dotted { background: none !important; border-top: 3px dotted var(--walk); height: 0; }
+  .swatch.dashed-grey { background: none !important; border-top: 2px dashed var(--text-3); height: 0; }
   .sub { margin-top: 14px; }
   .sub.off { opacity: 0.45; }
   .check { display: flex; gap: 10px; align-items: center; cursor: pointer; }
@@ -199,6 +200,13 @@
           <input type="number" min="1" max="100" step="1" data-key="quickStopDrop">
           <span class="help">How far the speed must drop below the slowest point of your last pedal stroke to count as stopping. Lower stops sooner. Raise it if you stop by mistake while still pedalling.</span>
         </div>
+        <div class="row">
+          <span class="name"><span class="swatch dashed-grey"></span>Only below (pulses/sec)</span>
+          <span></span>
+          <input type="range" min="0" max="35000" step="500" data-key="quickStopBelow">
+          <input type="number" min="0" step="500" data-key="quickStopBelow">
+          <span class="help">Quick stop only kicks in once you're slower than this, so slowing from a run to a walk doesn't stop you. Lower means fewer accidental stops, but stopping from a sprint takes a little longer.</span>
+        </div>
       </div>
     </section>
 
@@ -241,6 +249,7 @@
       <span><span class="swatch dotted"></span>Stop moving</span>
       <span><span class="swatch" style="background:var(--stop)"></span>Stop sprint</span>
       <span><span class="swatch" style="background:var(--sprint)"></span>Start sprint</span>
+      <span><span class="swatch dashed-grey"></span>Quick stop below</span>
       <span><span class="swatch block" style="background:var(--stopped)"></span>Quick stop</span>
     </div>
   </section>
@@ -363,7 +372,7 @@
   // ---------- Controls ----------
   function currentThresholds() {
     const get = (k) => Number(document.querySelector(`input[type=number][data-key="${k}"]`).value);
-    return { walk: get('walk'), sprint: get('sprint'), stop: get('stop'), stopMoving: get('stopMoving') };
+    return { walk: get('walk'), sprint: get('sprint'), stop: get('stop'), stopMoving: get('stopMoving'), quickStopBelow: get('quickStopBelow') };
   }
 
   function validate() {
@@ -493,6 +502,11 @@
       ctx.strokeStyle = css('--walk');
       const stopMovingAt = y(t.walk * t.stopMoving / 100);
       ctx.beginPath(); ctx.moveTo(pad.l, stopMovingAt); ctx.lineTo(pad.l + pw, stopMovingAt); ctx.stroke();
+      if (settings.quickStop === 1) {
+        ctx.setLineDash([8, 6]); ctx.lineWidth = 1; ctx.strokeStyle = css('--text-3');
+        const quickStopAt = y(Math.min(t.quickStopBelow, yMax));
+        ctx.beginPath(); ctx.moveTo(pad.l, quickStopAt); ctx.lineTo(pad.l + pw, quickStopAt); ctx.stroke();
+      }
       ctx.setLineDash([]);
     }
 

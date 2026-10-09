@@ -18,6 +18,7 @@ const bool SPRINT_ON_PRESS = false; //True if pressing sprint makes you faster, 
 const bool MOVE_WHEN_NO_INPUT = true; //walk forwards and backwards if pedalling and no keys pressed
 const bool QUICK_STOP = true; //Stop moving as soon as you stop pedalling, instead of when the pedals stop spinning (eg cs2)
 const long QUICK_STOP_DROP = 20; // Stopping is detected when the speed falls this % below the slowest point of the last pedal stroke
+const long QUICK_STOP_BELOW = 9000; // ...and is below this speed, so slowing from a run to a walk doesn't trigger it
 const long SMOOTHING_TIME = 150; // ms. When you slow down, the speed used for move and sprint falls over about this long, so the slow point of each pedal stroke doesn't stop you. Speeding up is instant. 0 = off
 const long STOP_MOVING_PERCENT = 75; // Once moving, keep moving until the speed drops below this % of WALK_SPEED, so it doesn't flicker on and off
 const long MIN_KEY_HOLD = 100; // ms. Movement keys pressed by the pedals stay down at least this long...
@@ -37,19 +38,20 @@ struct Settings {
   bool moveWhenNoInput;
   bool quickStop;
   long quickStopDrop;
+  long quickStopBelow;
   long stopMovingPercent;
   long minKeyHold;
   long minKeyRelease;
   long smoothingTime;
 };
 const Settings DEFAULT_SETTINGS = {WALK_SPEED, SPRINT_SPEED, STOP_SPRINT_SPEED, SPRINT_ON_PRESS, MOVE_WHEN_NO_INPUT,
-                                   QUICK_STOP, QUICK_STOP_DROP, STOP_MOVING_PERCENT, MIN_KEY_HOLD, MIN_KEY_RELEASE, SMOOTHING_TIME};
+                                   QUICK_STOP, QUICK_STOP_DROP, QUICK_STOP_BELOW, STOP_MOVING_PERCENT, MIN_KEY_HOLD, MIN_KEY_RELEASE, SMOOTHING_TIME};
 const long MIN_KEY_HOLD_FLOOR = 50; // The config app can't set the key times below these, to keep inputs human looking for anticheat
 const long MIN_KEY_RELEASE_FLOOR = 30;
 Settings settings = DEFAULT_SETTINGS; // Values actually in use
 
 // Layout of the settings saved in EEPROM. The defaults are saved too so changing them in code invalidates the saved settings
-const uint16_t SETTINGS_MAGIC = 0x504A; // Change this if the layout of SavedSettings changes
+const uint16_t SETTINGS_MAGIC = 0x504B; // Change this if the layout of SavedSettings changes
 struct SavedSettings {
   uint16_t magic;
   Settings defaults;
@@ -578,6 +580,7 @@ void printSettings(){ // e.g. CFG walk=2000 sprint=16000 stop=9000 sprintOnPress
   Serial.print(F(" moveWhenNoInput=")); Serial.print(settings.moveWhenNoInput);
   Serial.print(F(" quickStop=")); Serial.print(settings.quickStop);
   Serial.print(F(" quickStopDrop=")); Serial.print(settings.quickStopDrop);
+  Serial.print(F(" quickStopBelow=")); Serial.print(settings.quickStopBelow);
   Serial.print(F(" stopMoving=")); Serial.print(settings.stopMovingPercent);
   Serial.print(F(" minHold=")); Serial.print(settings.minKeyHold);
   Serial.print(F(" minRelease=")); Serial.print(settings.minKeyRelease);
@@ -602,6 +605,7 @@ bool applySetting(const char* name, long value){
     quickStopped = false;
   }
   else if (strcmp(name, "quickStopDrop") == 0) settings.quickStopDrop = min(value, 100L);
+  else if (strcmp(name, "quickStopBelow") == 0) settings.quickStopBelow = value;
   else if (strcmp(name, "stopMoving") == 0) settings.stopMovingPercent = min(value, 100L);
   else if (strcmp(name, "minHold") == 0) settings.minKeyHold = max(value, MIN_KEY_HOLD_FLOOR);
   else if (strcmp(name, "minRelease") == 0) settings.minKeyRelease = max(value, MIN_KEY_RELEASE_FLOOR);
@@ -734,7 +738,7 @@ void updateQuickStop(unsigned long currentTime){
   }
 
   float stopReference = (currentTime - lastStrokeTime > STROKE_TIMEOUT) ? fallPeak : lastStrokeLow;
-  if (settings.quickStop && !quickStopped && speedFalling
+  if (settings.quickStop && !quickStopped && speedFalling && smoothSpeed < settings.quickStopBelow
       && smoothSpeed < stopReference * (100 - settings.quickStopDrop) / 100.0){
     quickStopped = true; // movementInputs lets go of the movement keys
     movementSpeed = min(movementSpeed, speed); // So walk/run and the direction catch up with the stop straight away
