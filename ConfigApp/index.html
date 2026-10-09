@@ -208,6 +208,17 @@
           <span class="help">Quick stop only kicks in once you're slower than this, so slowing from a run to a walk doesn't stop you. Lower means fewer accidental stops, but stopping from a sprint takes a little longer.</span>
         </div>
       </div>
+      <label class="check" style="margin-top:14px"><input type="checkbox" id="counterStrafe"> Let me counter-strafe after I stop</label>
+      <p class="muted small" style="margin:6px 0 0">Just after you stop pedalling, W/A/S/D you press yourself work like a normal keyboard (up to 250 ms), so you can tap the opposite key to stop dead.</p>
+      <div class="sub" id="counterStrafeOptions">
+        <div class="row">
+          <span class="name">Counter-strafe window (ms)</span>
+          <span></span>
+          <input type="range" min="100" max="1000" step="50" data-key="counterStrafeWindow">
+          <input type="number" min="0" max="2000" step="50" data-key="counterStrafeWindow">
+          <span class="help">How long after the pedals let go of W/A/S/D your own presses go through.</span>
+        </div>
+      </div>
     </section>
 
     <section class="card">
@@ -365,6 +376,8 @@
     $('moveWhenNoInput').checked = cfg.moveWhenNoInput === 1;
     $('quickStop').checked = cfg.quickStop === 1;
     $('quickStopOptions').classList.toggle('off', cfg.quickStop !== 1);
+    $('counterStrafe').checked = cfg.counterStrafe === 1;
+    $('counterStrafeOptions').classList.toggle('off', cfg.counterStrafe !== 1);
     $('saveState').textContent = cfg.saved ? 'Saved on Arduino' : 'Unsaved changes';
     validate();
   }
@@ -411,6 +424,7 @@
   });
   $('moveWhenNoInput').addEventListener('change', (e) => send(`SET moveWhenNoInput=${e.target.checked ? 1 : 0}`));
   $('quickStop').addEventListener('change', (e) => send(`SET quickStop=${e.target.checked ? 1 : 0}`));
+  $('counterStrafe').addEventListener('change', (e) => send(`SET counterStrafe=${e.target.checked ? 1 : 0}`));
   $('saveBtn').addEventListener('click', () => send('SAVE'));
   $('resetBtn').addEventListener('click', () => {
     if (confirm('Reset all settings to the defaults in the Arduino code?')) send('RESET');
