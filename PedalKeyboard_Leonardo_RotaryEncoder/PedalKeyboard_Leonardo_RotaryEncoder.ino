@@ -16,6 +16,9 @@ const long SPRINT_SPEED = 16000;//22000; // Speed at which sprint is triggered
 const long STOP_SPRINT_SPEED = 9000;//6000 12000; // Speed must drop below this value to stop sprinting
 const bool SPRINT_ON_PRESS = false; //True if pressing sprint makes you faster, false if it makes you slower (eg csgo pressing shift)
 const bool MOVE_WHEN_NO_INPUT = true; //walk forwards and backwards if pedalling and no keys pressed
+const bool QUICK_STOP = false; //Stop moving as soon as you stop pedalling, instead of when the pedals stop spinning (eg cs2)
+const long QUICK_STOP_DROP = 15; // Stopping is detected when the speed falls this % below the slowest point of the last pedal stroke
+const long COUNTER_STRAFE_TIME = 0; // ms to tap the opposite movement key when quick stopping, 0 = off (eg cs2 counter strafe)
 const uint8_t sprintKey = KEY_LEFT_SHIFT; 
 //---------------------------------------
 
@@ -26,12 +29,16 @@ struct Settings {
   long stopSprintSpeed;
   bool sprintOnPress;
   bool moveWhenNoInput;
+  bool quickStop;
+  long quickStopDrop;
+  long counterStrafeTime;
 };
-const Settings DEFAULT_SETTINGS = {WALK_SPEED, SPRINT_SPEED, STOP_SPRINT_SPEED, SPRINT_ON_PRESS, MOVE_WHEN_NO_INPUT};
+const Settings DEFAULT_SETTINGS = {WALK_SPEED, SPRINT_SPEED, STOP_SPRINT_SPEED, SPRINT_ON_PRESS, MOVE_WHEN_NO_INPUT,
+                                   QUICK_STOP, QUICK_STOP_DROP, COUNTER_STRAFE_TIME};
 Settings settings = DEFAULT_SETTINGS; // Values actually in use
 
 // Layout of the settings saved in EEPROM. The defaults are saved too so changing them in code invalidates the saved settings
-const uint16_t SETTINGS_MAGIC = 0x5045; // Change this if the layout of SavedSettings changes
+const uint16_t SETTINGS_MAGIC = 0x5046; // Change this if the layout of SavedSettings changes
 struct SavedSettings {
   uint16_t magic;
   Settings defaults;
@@ -82,6 +89,24 @@ bool aPressed = false;
 bool sPressed = false;
 bool dPressed = false;
 bool crouched = false;
+
+//_____Quick_Stop_Stuff_____
+const float SPEED_SMOOTHING = 0.3; // 0-1, lower smooths the speed more before looking for a stop
+const float TURN_MARGIN = 0.05; // Speed must move this fraction away from a peak/low to count as a change of direction
+const long TURN_NOISE = 300; // ...plus this many pulses/sec, to ignore encoder noise at low speeds
+const unsigned long STROKE_TIMEOUT = 1500; // ms. If no strokes are seen for this long (very smooth pedalling), compare to the top speed instead
+float smoothSpeed = 0;
+bool speedFalling = false;
+float speedExtreme = 0;       // Highest speed since it started rising, or lowest since it started falling
+float lastStrokeLow = 0;      // Slowest point between the last two pedal pushes
+unsigned long lastStrokeTime = 0;
+float fallPeak = 0;           // Speed when it started falling
+bool quickStopped = false;    // True while the pedals are only spinning from momentum
+unsigned long counterStrafeEnd = 0;
+bool counterW = false;
+bool counterA = false;
+bool counterS = false;
+bool counterD = false;
 
 //_____Keyboard_Stuff_____
 const unsigned long timerInterval = 5; // Speed update every timerInterval ms
@@ -511,6 +536,9 @@ void printSettings(){ // e.g. CFG walk=2000 sprint=16000 stop=9000 sprintOnPress
   Serial.print(F(" stop=")); Serial.print(settings.stopSprintSpeed);
   Serial.print(F(" sprintOnPress=")); Serial.print(settings.sprintOnPress);
   Serial.print(F(" moveWhenNoInput=")); Serial.print(settings.moveWhenNoInput);
+  Serial.print(F(" quickStop=")); Serial.print(settings.quickStop);
+  Serial.print(F(" quickStopDrop=")); Serial.print(settings.quickStopDrop);
+  Serial.print(F(" counterStrafe=")); Serial.print(settings.counterStrafeTime);
   Serial.print(F(" saved=")); Serial.println(settingsSaved);
 }
 
@@ -526,6 +554,12 @@ bool applySetting(const char* name, long value){
     settings.sprintOnPress = value != 0;
   }
   else if (strcmp(name, "moveWhenNoInput") == 0) settings.moveWhenNoInput = value != 0;
+  else if (strcmp(name, "quickStop") == 0){
+    settings.quickStop = value != 0;
+    quickStopped = false;
+  }
+  else if (strcmp(name, "quickStopDrop") == 0) settings.quickStopDrop = min(value, 100L);
+  else if (strcmp(name, "counterStrafe") == 0) settings.counterStrafeTime = value;
   else return false;
   settingsSaved = false;
   return true;
@@ -585,6 +619,8 @@ void updateSpeedDirection(){
     lastEncoderValue = encoderValue;
     lastTime = currentTime;
 
+    updateQuickStop(currentTime);
+
     // Output speed and direction
     //Serial.print("Speed: ");
     
@@ -593,10 +629,58 @@ void updateSpeedDirection(){
     Serial.print(35000); // To freeze the upper limit
     
     Serial.print(" ");
-    Serial.println(speed);
+    Serial.print(speed);
+    Serial.print(" ");
+    Serial.println(quickStopped); // 1 while quick stop has released the movement keys
   
     //Serial.print(" pulses/sec, Forward: ");
     //Serial.println(pedalForward);
+  }
+}
+
+// Pedalling gives the speed a push every stroke, so it rises and falls a bit even at a steady pace.
+// Momentum only ever slows down, so once the speed falls well below the slowest point of the last stroke, treat it as stopping
+void updateQuickStop(unsigned long currentTime){
+  smoothSpeed += (speed - smoothSpeed) * SPEED_SMOOTHING;
+
+  if (speedFalling){
+    if (smoothSpeed > speedExtreme * (1 + TURN_MARGIN) + TURN_NOISE){
+      // Pushed again: the lowest point is the slowest point of this stroke
+      lastStrokeLow = speedExtreme;
+      lastStrokeTime = currentTime;
+      speedFalling = false;
+      speedExtreme = smoothSpeed;
+      if (quickStopped){
+        quickStopped = false;
+        counterStrafeEnd = currentTime; // Stop any counter strafe so it doesn't fight the new movement
+      }
+      return;
+    }
+    speedExtreme = min(speedExtreme, smoothSpeed);
+  } else{
+    if (smoothSpeed < speedExtreme * (1 - TURN_MARGIN) - TURN_NOISE){
+      speedFalling = true;
+      fallPeak = speedExtreme;
+      speedExtreme = smoothSpeed;
+    } else{
+      speedExtreme = max(speedExtreme, smoothSpeed);
+    }
+  }
+
+  float stopReference = (currentTime - lastStrokeTime > STROKE_TIMEOUT) ? fallPeak : lastStrokeLow;
+  if (settings.quickStop && !quickStopped && speedFalling
+      && smoothSpeed < stopReference * (100 - settings.quickStopDrop) / 100.0){
+    quickStopped = true;
+    // Let go of the movement keys now instead of waiting for them to time out, and remember the opposite keys for the counter strafe
+    counterW = currentTime < lastSInput + unpressInterval;
+    counterA = currentTime < lastDInput + unpressInterval;
+    counterS = currentTime < lastWInput + unpressInterval;
+    counterD = currentTime < lastAInput + unpressInterval;
+    Keyboard.release('w'); lastWInput = 0;
+    Keyboard.release('a'); lastAInput = 0;
+    Keyboard.release('s'); lastSInput = 0;
+    Keyboard.release('d'); lastDInput = 0;
+    counterStrafeEnd = currentTime + settings.counterStrafeTime;
   }
 }
 
@@ -641,6 +725,14 @@ void movementInputs(){
     Keyboard.release('d');
   }
 
+  //Quick stop counter strafe: hold the opposite keys for a moment
+  if (quickStopped && currentTime < counterStrafeEnd){
+    if (counterW){ Keyboard.press('w'); lastWInput = currentTime; }
+    if (counterA){ Keyboard.press('a'); lastAInput = currentTime; }
+    if (counterS){ Keyboard.press('s'); lastSInput = currentTime; }
+    if (counterD){ Keyboard.press('d'); lastDInput = currentTime; }
+  }
+
   //Extend time if still pressed and pedal fast enough
   if (settings.sprintOnPress){
     if (speed >= settings.sprintSpeed) {
@@ -679,7 +771,7 @@ void movementInputs(){
     } 
   }
 
-  if (speed >= settings.walkSpeed){
+  if (speed >= settings.walkSpeed && !quickStopped){
     if (pedalForward){
       if (wPressed){
         Keyboard.press('w');

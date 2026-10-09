@@ -20,6 +20,7 @@
     --walk: #1baf7a;
     --stop: #eda100;
     --sprint: #eb6834;
+    --stopped: rgba(11, 11, 11, 0.08);
     --warn-bg: #fff4d6;
     --warn-text: #6b4a00;
     --err-text: #b42318;
@@ -39,6 +40,7 @@
       --walk: #199e70;
       --stop: #c98500;
       --sprint: #d95926;
+      --stopped: rgba(240, 239, 236, 0.10);
       --warn-bg: #3a2e0c;
       --warn-text: #f5d58a;
       --err-text: #ff8a80;
@@ -58,6 +60,7 @@
     --walk: #199e70;
     --stop: #c98500;
     --sprint: #d95926;
+    --stopped: rgba(240, 239, 236, 0.10);
     --warn-bg: #3a2e0c;
     --warn-text: #f5d58a;
     --err-text: #ff8a80;
@@ -98,6 +101,9 @@
   .row input[type=range] { grid-column: 1 / 2; width: 100%; }
   .row input[type=number] { width: 100%; font: inherit; padding: 4px 6px; border-radius: 6px; border: 1px solid var(--border); background: var(--bg); color: var(--text); }
   .swatch { width: 14px; height: 3px; border-radius: 2px; display: inline-block; }
+  .swatch.block { height: 12px; border: 1px solid var(--border); }
+  .sub { margin-top: 14px; }
+  .sub.off { opacity: 0.45; }
   .check { display: flex; gap: 10px; align-items: center; cursor: pointer; }
   .actions { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
   .warn { color: var(--err-text); font-size: 13px; min-height: 1em; margin: 0 0 8px; }
@@ -164,6 +170,28 @@
     </section>
 
     <section class="card">
+      <h2>Quick stop</h2>
+      <label class="check"><input type="checkbox" id="quickStop"> Stop moving as soon as I stop pedalling (e.g. CS2)</label>
+      <p class="muted small" style="margin:6px 0 0">Without this you keep moving while the pedals spin down. The shaded areas on the live speed graph show when quick stop kicked in.</p>
+      <div class="sub" id="quickStopOptions">
+        <div class="row">
+          <span class="name">Drop needed (%)</span>
+          <span></span>
+          <input type="range" min="1" max="60" step="1" data-key="quickStopDrop">
+          <input type="number" min="1" max="100" step="1" data-key="quickStopDrop">
+          <span class="help">How far the speed must drop below the slowest point of your last pedal stroke to count as stopping. Lower stops sooner. Raise it if you stop by mistake while still pedalling.</span>
+        </div>
+        <div class="row">
+          <span class="name">Counter-strafe (ms)</span>
+          <span></span>
+          <input type="range" min="0" max="300" step="5" data-key="counterStrafe">
+          <input type="number" min="0" step="5" data-key="counterStrafe">
+          <span class="help">Briefly presses the opposite movement key when you stop, so you stop dead instead of sliding. 0 = off.</span>
+        </div>
+      </div>
+    </section>
+
+    <section class="card">
       <div class="actions">
         <button class="primary" id="saveBtn">Save to Arduino</button>
         <button id="resetBtn">Reset to defaults</button>
@@ -182,6 +210,7 @@
       <span><span class="swatch" style="background:var(--walk)"></span>Move</span>
       <span><span class="swatch" style="background:var(--stop)"></span>Stop sprint</span>
       <span><span class="swatch" style="background:var(--sprint)"></span>Start sprint</span>
+      <span><span class="swatch block" style="background:var(--stopped)"></span>Quick stop</span>
     </div>
   </section>
 
@@ -270,9 +299,9 @@
 
   function handleLine(line) {
     if (!line) return;
-    // Speed lines are "0 35000 <speed>" (the first two numbers fix the Serial Plotter's scale)
-    const m = /^0 35000 (-?[\d.]+)$/.exec(line);
-    if (m) { addSample(parseFloat(m[1])); return; }
+    // Speed lines are "0 35000 <speed> <quick stopped 0/1>" (the first two numbers fix the Serial Plotter's scale)
+    const m = /^0 35000 (-?[\d.]+)(?: ([01]))?$/.exec(line);
+    if (m) { addSample(parseFloat(m[1]), m[2] === '1'); return; }
     if (line.startsWith('CFG ')) { applyCfg(line); }
     log(line);
   }
@@ -286,12 +315,14 @@
     settings = cfg;
     $('oldFirmware').classList.add('hidden');
     $('settingsFields').disabled = false;
-    for (const key of ['walk', 'sprint', 'stop']) {
+    for (const key of new Set([...document.querySelectorAll('[data-key]')].map((el) => el.dataset.key))) {
       if (pendingSends[key]) continue; // Don't fight the slider the user is dragging
       document.querySelectorAll(`[data-key="${key}"]`).forEach((el) => { el.value = cfg[key]; });
     }
     document.querySelector(`input[name=mode][value="${cfg.sprintOnPress}"]`).checked = true;
     $('moveWhenNoInput').checked = cfg.moveWhenNoInput === 1;
+    $('quickStop').checked = cfg.quickStop === 1;
+    $('quickStopOptions').classList.toggle('off', cfg.quickStop !== 1);
     $('saveState').textContent = cfg.saved ? 'Saved on Arduino' : 'Unsaved changes';
     validate();
   }
@@ -328,6 +359,7 @@
     el.addEventListener('change', () => send(`SET sprintOnPress=${el.value}`));
   });
   $('moveWhenNoInput').addEventListener('change', (e) => send(`SET moveWhenNoInput=${e.target.checked ? 1 : 0}`));
+  $('quickStop').addEventListener('change', (e) => send(`SET quickStop=${e.target.checked ? 1 : 0}`));
   $('saveBtn').addEventListener('click', () => send('SAVE'));
   $('resetBtn').addEventListener('click', () => {
     if (confirm('Reset all settings to the defaults in the Arduino code?')) send('RESET');
@@ -358,9 +390,9 @@
   }
 
   // ---------- Live chart ----------
-  function addSample(v) {
+  function addSample(v, stopped) {
     const now = performance.now();
-    samples.push({ t: now, v });
+    samples.push({ t: now, v, stopped });
     while (samples.length && samples[0].t < now - HISTORY_MS) samples.shift();
   }
 
@@ -395,6 +427,17 @@
       ctx.beginPath(); ctx.moveTo(pad.l, Math.round(y(v)) + 0.5); ctx.lineTo(pad.l + pw, Math.round(y(v)) + 0.5); ctx.stroke();
       ctx.fillStyle = css('--text-3');
       ctx.fillText(v === 0 ? '0' : (v / 1000) + 'k', pad.l - 6, y(v));
+    }
+
+    // Shade the times quick stop released the movement keys
+    ctx.fillStyle = css('--stopped');
+    for (let i = 0; i < samples.length; i++) {
+      if (!samples[i].stopped) continue;
+      const start = i;
+      while (i + 1 < samples.length && samples[i + 1].stopped) i++;
+      const x0 = Math.max(pad.l, x(samples[start].t));
+      const x1 = i + 1 < samples.length ? x(samples[i + 1].t) : pad.l + pw;
+      ctx.fillRect(x0, pad.t, Math.max(1, x1 - x0), ph);
     }
 
     // Threshold lines (only meaningful once settings are loaded)
