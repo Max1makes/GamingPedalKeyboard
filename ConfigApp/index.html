@@ -102,6 +102,7 @@
   .row input[type=number] { width: 100%; font: inherit; padding: 4px 6px; border-radius: 6px; border: 1px solid var(--border); background: var(--bg); color: var(--text); }
   .swatch { width: 14px; height: 3px; border-radius: 2px; display: inline-block; }
   .swatch.block { height: 12px; border: 1px solid var(--border); }
+  .swatch.dotted { background: none !important; border-top: 3px dotted var(--walk); height: 0; }
   .sub { margin-top: 14px; }
   .sub.off { opacity: 0.45; }
   .check { display: flex; gap: 10px; align-items: center; cursor: pointer; }
@@ -152,6 +153,13 @@
         <span class="help">Pedal faster than this to move.</span>
       </div>
       <div class="row">
+        <span class="name"><span class="swatch dotted"></span>Stop moving (% of Move)</span>
+        <span></span>
+        <input type="range" min="50" max="100" step="1" data-key="stopMoving">
+        <input type="number" min="0" max="100" step="1" data-key="stopMoving">
+        <span class="help">Once moving, you keep moving until you slow below this % of the Move speed. Lower stops flickering if you pedal right around the Move speed. 100 = stop at the Move speed.</span>
+      </div>
+      <div class="row">
         <span class="name"><span class="swatch" style="background:var(--sprint)"></span>Start sprint</span>
         <span></span>
         <input type="range" min="0" max="35000" step="100" data-key="sprint">
@@ -185,6 +193,24 @@
     </section>
 
     <section class="card">
+      <h2>Key timing</h2>
+      <div class="row">
+        <span class="name">Minimum hold (ms)</span>
+        <span></span>
+        <input type="range" min="50" max="300" step="10" data-key="minHold">
+        <input type="number" min="50" step="10" data-key="minHold">
+        <span class="help">Keys the pedals press stay down at least this long. Can't go below 50 ms, to keep inputs human-looking.</span>
+      </div>
+      <div class="row">
+        <span class="name">Minimum release (ms)</span>
+        <span></span>
+        <input type="range" min="30" max="200" step="10" data-key="minRelease">
+        <input type="number" min="30" step="10" data-key="minRelease">
+        <span class="help">Keys stay up at least this long before the pedals press them again. Can't go below 30 ms.</span>
+      </div>
+    </section>
+
+    <section class="card">
       <div class="actions">
         <button class="primary" id="saveBtn">Save to Arduino</button>
         <button id="resetBtn">Reset to defaults</button>
@@ -201,6 +227,7 @@
     <div class="legend">
       <span><span class="swatch" style="background:var(--speed)"></span>Speed</span>
       <span><span class="swatch" style="background:var(--walk)"></span>Move</span>
+      <span><span class="swatch dotted"></span>Stop moving</span>
       <span><span class="swatch" style="background:var(--stop)"></span>Stop sprint</span>
       <span><span class="swatch" style="background:var(--sprint)"></span>Start sprint</span>
       <span><span class="swatch block" style="background:var(--stopped)"></span>Quick stop</span>
@@ -310,7 +337,9 @@
     $('settingsFields').disabled = false;
     for (const key of new Set([...document.querySelectorAll('[data-key]')].map((el) => el.dataset.key))) {
       if (pendingSends[key]) continue; // Don't fight the slider the user is dragging
-      document.querySelectorAll(`[data-key="${key}"]`).forEach((el) => { el.value = cfg[key]; });
+      document.querySelectorAll(`[data-key="${key}"]`).forEach((el) => {
+        if (el !== document.activeElement || el.type !== 'number') el.value = cfg[key]; // Don't overwrite a number while it's being typed
+      });
     }
     document.querySelector(`input[name=mode][value="${cfg.sprintOnPress}"]`).checked = true;
     $('moveWhenNoInput').checked = cfg.moveWhenNoInput === 1;
@@ -323,7 +352,7 @@
   // ---------- Controls ----------
   function currentThresholds() {
     const get = (k) => Number(document.querySelector(`input[type=number][data-key="${k}"]`).value);
-    return { walk: get('walk'), sprint: get('sprint'), stop: get('stop') };
+    return { walk: get('walk'), sprint: get('sprint'), stop: get('stop'), stopMoving: get('stopMoving') };
   }
 
   function validate() {
@@ -334,10 +363,19 @@
     $('warn').textContent = problems.join(' ');
   }
 
+  // Keeps a value within the number box's min/max (the firmware applies the same limits)
+  function clampSetting(key, raw) {
+    const box = document.querySelector(`input[type=number][data-key="${key}"]`);
+    let value = Math.max(Number(box.min) || 0, Math.round(Number(raw) || 0));
+    if (box.max) value = Math.min(Number(box.max), value);
+    return value;
+  }
+
   document.querySelectorAll('[data-key]').forEach((el) => {
+    el.addEventListener('change', () => { el.value = clampSetting(el.dataset.key, el.value); });
     el.addEventListener('input', () => {
       const key = el.dataset.key;
-      const value = Math.max(0, Math.round(Number(el.value) || 0));
+      const value = clampSetting(key, el.value);
       document.querySelectorAll(`[data-key="${key}"]`).forEach((other) => { if (other !== el) other.value = value; });
       validate();
       clearTimeout(pendingSends[key]);
@@ -440,6 +478,10 @@
         ctx.strokeStyle = css(color);
         ctx.beginPath(); ctx.moveTo(pad.l, y(t[key])); ctx.lineTo(pad.l + pw, y(t[key])); ctx.stroke();
       }
+      ctx.setLineDash([2, 4]);
+      ctx.strokeStyle = css('--walk');
+      const stopMovingAt = y(t.walk * t.stopMoving / 100);
+      ctx.beginPath(); ctx.moveTo(pad.l, stopMovingAt); ctx.lineTo(pad.l + pw, stopMovingAt); ctx.stroke();
       ctx.setLineDash([]);
     }
 

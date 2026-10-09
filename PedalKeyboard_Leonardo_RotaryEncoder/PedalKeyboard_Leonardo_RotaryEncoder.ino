@@ -19,8 +19,8 @@ const bool MOVE_WHEN_NO_INPUT = true; //walk forwards and backwards if pedalling
 const bool QUICK_STOP = false; //Stop moving as soon as you stop pedalling, instead of when the pedals stop spinning (eg cs2)
 const long QUICK_STOP_DROP = 15; // Stopping is detected when the speed falls this % below the slowest point of the last pedal stroke
 const long STOP_MOVING_PERCENT = 75; // Once moving, keep moving until the speed drops below this % of WALK_SPEED, so it doesn't flicker on and off
-const unsigned long MIN_KEY_HOLD = 100; // ms. Movement keys pressed by the pedals stay down at least this long...
-const unsigned long MIN_KEY_RELEASE = 50; // ms. ...and stay up at least this long, so the game never sees inhumanly fast taps
+const long MIN_KEY_HOLD = 100; // ms. Movement keys pressed by the pedals stay down at least this long...
+const long MIN_KEY_RELEASE = 50; // ms. ...and stay up at least this long, so the game never sees inhumanly fast taps
 const uint8_t sprintKey = KEY_LEFT_SHIFT; 
 //---------------------------------------
 
@@ -33,13 +33,18 @@ struct Settings {
   bool moveWhenNoInput;
   bool quickStop;
   long quickStopDrop;
+  long stopMovingPercent;
+  long minKeyHold;
+  long minKeyRelease;
 };
 const Settings DEFAULT_SETTINGS = {WALK_SPEED, SPRINT_SPEED, STOP_SPRINT_SPEED, SPRINT_ON_PRESS, MOVE_WHEN_NO_INPUT,
-                                   QUICK_STOP, QUICK_STOP_DROP};
+                                   QUICK_STOP, QUICK_STOP_DROP, STOP_MOVING_PERCENT, MIN_KEY_HOLD, MIN_KEY_RELEASE};
+const long MIN_KEY_HOLD_FLOOR = 50; // The config app can't set the key times below these, to keep inputs human looking for anticheat
+const long MIN_KEY_RELEASE_FLOOR = 30;
 Settings settings = DEFAULT_SETTINGS; // Values actually in use
 
 // Layout of the settings saved in EEPROM. The defaults are saved too so changing them in code invalidates the saved settings
-const uint16_t SETTINGS_MAGIC = 0x5047; // Change this if the layout of SavedSettings changes
+const uint16_t SETTINGS_MAGIC = 0x5048; // Change this if the layout of SavedSettings changes
 struct SavedSettings {
   uint16_t magic;
   Settings defaults;
@@ -90,7 +95,7 @@ bool aPressed = false;
 bool sPressed = false;
 bool dPressed = false;
 bool crouched = false;
-bool moving = false;          // True while pedalling fast enough to move (see STOP_MOVING_PERCENT)
+bool moving = false;          // True while pedalling fast enough to move (see settings.stopMovingPercent)
 bool movingForward = true;    // Direction when movement started, only changes once you stop
 
 // Movement and sprint keys held down by the pedals
@@ -150,9 +155,9 @@ void KbdRptParser::PrintKey(uint8_t m, uint8_t key)
   Serial.print((mod.bmLeftAlt    == 1) ? "A" : " ");
   Serial.print((mod.bmLeftGUI    == 1) ? "G" : " ");
 
-  Serial.print(" >");
+  Serial.print(F(" >"));
   PrintHex<uint8_t>(key, 0x80);
-  Serial.print("< ");
+  Serial.print(F("< "));
 
   Serial.print((mod.bmRightCtrl   == 1) ? "C" : " ");
   Serial.print((mod.bmRightShift  == 1) ? "S" : " ");
@@ -163,61 +168,61 @@ void KbdRptParser::PrintKey(uint8_t m, uint8_t key)
 
 void KbdRptParser::OnKeyDown(uint8_t mod, uint8_t key)
 {
-  //Serial.print("DN ");
+  //Serial.print(F("DN "));
   //PrintKey(mod, key);
   switch (key){
         case WKey:
-          Serial.println("W pressed override for movement");
+          Serial.println(F("W pressed override for movement"));
           wPressed = true;
           break;
         case AKey:
-          Serial.println("A pressed override for movement");
+          Serial.println(F("A pressed override for movement"));
           aPressed = true;
           break;
         case SKey:
-          Serial.println("S pressed override for movement");
+          Serial.println(F("S pressed override for movement"));
           sPressed = true;
           break;
         case DKey:
-          Serial.println("D pressed override for movement");
+          Serial.println(F("D pressed override for movement"));
           dPressed = true;
           break;
   }
   uint8_t c = OemToAscii(mod, key);
   if (key == EnterCode){
-    Serial.println("ENTER OVERRIDE"); //Enter key was being picked up as an ascii one
+    Serial.println(F("ENTER OVERRIDE")); //Enter key was being picked up as an ascii one
     OnSpecialKeysChanged(key, true);
   } else{
     if (c){
       showASCII(c);
-      Serial.println(" pressed");
+      Serial.println(F(" pressed"));
       Keyboard.press(c);
   } else{
       OnSpecialKeysChanged(key, true);
   }
-  //Serial.println("pressed");
+  //Serial.println(F("pressed"));
   //Serial.println(key);
   }
 }
 
 void KbdRptParser::OnKeyUp(uint8_t mod, uint8_t key){
-  //Serial.print("keypress ");
+  //Serial.print(F("keypress "));
   //PrintKey(mod, key);
   switch (key){
         case WKey:
-          Serial.println("W unpressed ovveride for movement");
+          Serial.println(F("W unpressed ovveride for movement"));
           wPressed = false;
           break;
         case AKey:
-          Serial.println("A unpressed ovveride for movement");
+          Serial.println(F("A unpressed ovveride for movement"));
           aPressed = false;
           break;
         case SKey:
-          Serial.println("S unpressed ovveride for movement");
+          Serial.println(F("S unpressed ovveride for movement"));
           sPressed = false;
           break;
         case DKey:
-          Serial.println("D unpressed ovveride for movement");
+          Serial.println(F("D unpressed ovveride for movement"));
           dPressed = false;
           break;
   }
@@ -226,17 +231,17 @@ void KbdRptParser::OnKeyUp(uint8_t mod, uint8_t key){
   }
   uint8_t c = OemToAscii(mod, key);
   if (key == EnterCode){
-    Serial.println("ENTER OVERRIDE"); //Enter key was being picked up as an ascii one
+    Serial.println(F("ENTER OVERRIDE")); //Enter key was being picked up as an ascii one
     OnSpecialKeysChanged(key, false);
   } else{
     if (c){
       showASCII(c);
-      Serial.println(" released");
+      Serial.println(F(" released"));
       Keyboard.release(c);
   } else{
     OnSpecialKeysChanged(key, false);
   }
-  //Serial.println("released");
+  //Serial.println(F("released"));
   //Serial.println(key);
   }
 }
@@ -250,79 +255,79 @@ void KbdRptParser::OnControlKeysChanged(uint8_t before, uint8_t after) {
 
     // Check each modifier key for press and release
     if (beforeMod.bmLeftCtrl == 0 && afterMod.bmLeftCtrl == 1) {
-        Serial.println("LeftCtrl pressed");
+        Serial.println(F("LeftCtrl pressed"));
         Keyboard.press(KEY_LEFT_CTRL);
         crouched = true;
 
     }
     if (beforeMod.bmLeftCtrl == 1 && afterMod.bmLeftCtrl == 0) {
-        Serial.println("LeftCtrl released");
+        Serial.println(F("LeftCtrl released"));
         Keyboard.release(KEY_LEFT_CTRL);
         crouched = false;
     }
 
     if (beforeMod.bmLeftShift == 0 && afterMod.bmLeftShift == 1) {
-        Serial.println("LeftShift pressed");
+        Serial.println(F("LeftShift pressed"));
         Keyboard.press(KEY_LEFT_SHIFT);
     }
     if (beforeMod.bmLeftShift == 1 && afterMod.bmLeftShift == 0) {
-        Serial.println("LeftShift released");
+        Serial.println(F("LeftShift released"));
         if (!(sprintKey == KEY_LEFT_SHIFT && pedalSprint.held)){ // Don't blip it if the pedals are holding it
           Keyboard.release(KEY_LEFT_SHIFT);
         }
     }
 
     if (beforeMod.bmLeftAlt == 0 && afterMod.bmLeftAlt == 1) {
-        Serial.println("LeftAlt pressed");
+        Serial.println(F("LeftAlt pressed"));
         Keyboard.press(KEY_LEFT_ALT);
     }
     if (beforeMod.bmLeftAlt == 1 && afterMod.bmLeftAlt == 0) {
-        Serial.println("LeftAlt released");
+        Serial.println(F("LeftAlt released"));
         Keyboard.release(KEY_LEFT_ALT);
     }
 
     if (beforeMod.bmLeftGUI == 0 && afterMod.bmLeftGUI == 1) {
-        Serial.println("LeftGUI pressed");
+        Serial.println(F("LeftGUI pressed"));
         Keyboard.press(KEY_LEFT_GUI);
     }
     if (beforeMod.bmLeftGUI == 1 && afterMod.bmLeftGUI == 0) {
-        Serial.println("LeftGUI released");
+        Serial.println(F("LeftGUI released"));
         Keyboard.release(KEY_LEFT_GUI);
     }
 
     if (beforeMod.bmRightCtrl == 0 && afterMod.bmRightCtrl == 1) {
-        Serial.println("RightCtrl pressed");
+        Serial.println(F("RightCtrl pressed"));
         Keyboard.press(KEY_RIGHT_CTRL);
     }
     if (beforeMod.bmRightCtrl == 1 && afterMod.bmRightCtrl == 0) {
-        Serial.println("RightCtrl released");
+        Serial.println(F("RightCtrl released"));
         Keyboard.release(KEY_RIGHT_CTRL);
     }
 
     if (beforeMod.bmRightShift == 0 && afterMod.bmRightShift == 1) {
-        Serial.println("RightShift pressed");
+        Serial.println(F("RightShift pressed"));
         Keyboard.press(KEY_RIGHT_SHIFT);
     }
     if (beforeMod.bmRightShift == 1 && afterMod.bmRightShift == 0) {
-        Serial.println("RightShift released");
+        Serial.println(F("RightShift released"));
         Keyboard.release(KEY_RIGHT_SHIFT);
     }
 
     if (beforeMod.bmRightAlt == 0 && afterMod.bmRightAlt == 1) {
-        Serial.println("RightAlt pressed");
+        Serial.println(F("RightAlt pressed"));
         Keyboard.press(KEY_RIGHT_ALT);
     }
     if (beforeMod.bmRightAlt == 1 && afterMod.bmRightAlt == 0) {
-        Serial.println("RightAlt released");
+        Serial.println(F("RightAlt released"));
         Keyboard.release(KEY_RIGHT_ALT);
     }
 
     if (beforeMod.bmRightGUI == 0 && afterMod.bmRightGUI == 1) { //Windows key
-        Serial.println("RightGUI pressed");
+        Serial.println(F("RightGUI pressed"));
         Keyboard.press(KEY_RIGHT_GUI);
     }
     if (beforeMod.bmRightGUI == 1 && afterMod.bmRightGUI == 0) {
-        Serial.println("RightGUI released");
+        Serial.println(F("RightGUI released"));
         Keyboard.release(KEY_RIGHT_GUI);
     }
 }
@@ -331,152 +336,152 @@ void KbdRptParser::OnSpecialKeysChanged(uint8_t key, bool pressed) { //CAPS LOCK
     // Define special keys' HID usage codes
 
     if (pressed){ // True if press, False if release
-      //Serial.print("pressed");
+      //Serial.print(F("pressed"));
           // Never used a switch case, be nice or I will return us all to IF ELSE purgatory
       switch (key){
         case EscapeCode:
-          Serial.println("ESCAPE KEY PRESSED");
+          Serial.println(F("ESCAPE KEY PRESSED"));
           Keyboard.press(KEY_ESC);
           break;
       
         case BackspaceCode:
-          Serial.println("BACKSPACE KEY PRESSED");
+          Serial.println(F("BACKSPACE KEY PRESSED"));
           Keyboard.press(KEY_BACKSPACE);
           break;
 
         case TabCode:
-          Serial.println("Tab KEY PRESSED");
+          Serial.println(F("Tab KEY PRESSED"));
           Keyboard.press(KEY_TAB);
           break;
         
         case EnterCode:
-          Serial.println("Enter KEY PRESSED");
+          Serial.println(F("Enter KEY PRESSED"));
           Keyboard.press(KEY_RETURN);
           break;
         
         case RightArrowCode:
-          Serial.println("Right Arrow KEY PRESSED");
+          Serial.println(F("Right Arrow KEY PRESSED"));
           Keyboard.press(KEY_RIGHT_ARROW);
           break;
 
         case LeftArrowCode:
-          Serial.println("Left Arrow KEY PRESSED");
+          Serial.println(F("Left Arrow KEY PRESSED"));
           Keyboard.press(KEY_LEFT_ARROW);
           break;
 
         case DownArrowCode:
-          Serial.println("Down Arrow KEY PRESSED");
+          Serial.println(F("Down Arrow KEY PRESSED"));
           Keyboard.press(KEY_DOWN_ARROW);
           break;
         
         case UpArrowCode:
-          Serial.println("Up Arrow KEY PRESSED");
+          Serial.println(F("Up Arrow KEY PRESSED"));
           Keyboard.press(KEY_UP_ARROW);
           break;
 
         case CapsLockCode:
-          Serial.println("Caps Lock KEY PRESSED");
+          Serial.println(F("Caps Lock KEY PRESSED"));
           //Keyboard.press(KEY_CAPS_LOCK);
           break;
         
         case PageUpCode:
-          Serial.println("PageUp KEY PRESSED");
+          Serial.println(F("PageUp KEY PRESSED"));
           Keyboard.press(KEY_PAGE_UP);
           break;
         
         case PageDownCode:
-          Serial.println("Page Down KEY PRESSED");
+          Serial.println(F("Page Down KEY PRESSED"));
           Keyboard.press(KEY_PAGE_DOWN);
           break;
         
         case EndCode:
-          Serial.println("End KEY PRESSED");
+          Serial.println(F("End KEY PRESSED"));
           Keyboard.press(KEY_END);
           break;
         
         case HomeCode:
-          Serial.println("Home KEY PRESSED");
+          Serial.println(F("Home KEY PRESSED"));
           Keyboard.press(KEY_HOME);
           break;
 
         default:
-          Serial.print("Unknown keypress, please define above keycode 0x: "); //may be incorrect
+          Serial.print(F("Unknown keypress, please define above keycode 0x: ")); //may be incorrect
           Serial.print(key, HEX);
-          Serial.println("");
+          Serial.println(F(""));
           break;
     }
     } else {
-      //Serial.print("unpressed");
+      //Serial.print(F("unpressed"));
       switch (key){
         case EscapeCode:
-          Serial.println("ESCAPE KEY UNPRESSED");
+          Serial.println(F("ESCAPE KEY UNPRESSED"));
           Keyboard.release(KEY_ESC);
           break;
       
         case BackspaceCode:
-          Serial.println("BACKSPACE KEY UNPRESSED");
+          Serial.println(F("BACKSPACE KEY UNPRESSED"));
           Keyboard.release(KEY_BACKSPACE);
           break;
 
         case TabCode:
-          Serial.println("Tab KEY UNPRESSED");
+          Serial.println(F("Tab KEY UNPRESSED"));
           Keyboard.release(KEY_TAB);
           break;
         
         case EnterCode:
-          Serial.println("Enter KEY UNPRESSED");
+          Serial.println(F("Enter KEY UNPRESSED"));
           Keyboard.release(KEY_RETURN);
           break;
         
         case RightArrowCode:
-          Serial.println("Right Arrow KEY UNPRESSED");
+          Serial.println(F("Right Arrow KEY UNPRESSED"));
           Keyboard.release(KEY_RIGHT_ARROW);
           break;
 
         case LeftArrowCode:
-          Serial.println("Left Arrow KEY UNPRESSED");
+          Serial.println(F("Left Arrow KEY UNPRESSED"));
           Keyboard.release(KEY_LEFT_ARROW);
           break;
 
         case DownArrowCode:
-          Serial.println("Down Arrow KEY UNPRESSED");
+          Serial.println(F("Down Arrow KEY UNPRESSED"));
           Keyboard.release(KEY_DOWN_ARROW);
           break;
         
         case UpArrowCode:
-          Serial.println("Up Arrow KEY UNPRESSED");
+          Serial.println(F("Up Arrow KEY UNPRESSED"));
           Keyboard.release(KEY_UP_ARROW);
           break;
 
         case CapsLockCode:
-          Serial.println("Caps Lock KEY UNPRESSED");
+          Serial.println(F("Caps Lock KEY UNPRESSED"));
           //Keyboard.release(KEY_CAPS_LOCK);
           break;
         
         case PageUpCode:
-          Serial.println("PageUp KEY UNPRESSED");
+          Serial.println(F("PageUp KEY UNPRESSED"));
           Keyboard.release(KEY_PAGE_UP);
           break;
         
         case PageDownCode:
-          Serial.println("Page Down KEY UNPRESSED");
+          Serial.println(F("Page Down KEY UNPRESSED"));
           Keyboard.release(KEY_PAGE_DOWN);
           break;
         
         case EndCode:
-          Serial.println("End KEY UNPRESSED");
+          Serial.println(F("End KEY UNPRESSED"));
           Keyboard.release(KEY_END);
           break;
         
         case HomeCode:
-          Serial.println("Home KEY UNPRESSED");
+          Serial.println(F("Home KEY UNPRESSED"));
           Keyboard.release(KEY_HOME);
           break;
 
         default:
-          Serial.print("Unknown keypress, please define above keycode 0x: "); //may be incorrect
+          Serial.print(F("Unknown keypress, please define above keycode 0x: ")); //may be incorrect
           Serial.print(key, HEX);
-          Serial.println("");
+          Serial.println(F(""));
           break;
       }
     }
@@ -484,7 +489,7 @@ void KbdRptParser::OnSpecialKeysChanged(uint8_t key, bool pressed) { //CAPS LOCK
 
 void KbdRptParser::showASCII(uint8_t key)
 {
-  Serial.print("ASCII: ");
+  Serial.print(F("ASCII: "));
   Serial.print((char)key);
 };
 
@@ -501,9 +506,9 @@ void setup(){
     //while (!Serial); // Wait for serial port to connect - used on Leonardo, Teensy and other boards with built-in USB CDC serial connection
     delay(1);
   #endif
-  Serial.println("Start");
+  Serial.println(F("Start"));
   if (Usb.Init() == -1)
-    Serial.println("OSC did not start.");
+    Serial.println(F("OSC did not start."));
   delay( 200 );
   HidKeyboard.SetReportParser(0, &Prs);
   
@@ -553,6 +558,9 @@ void printSettings(){ // e.g. CFG walk=2000 sprint=16000 stop=9000 sprintOnPress
   Serial.print(F(" moveWhenNoInput=")); Serial.print(settings.moveWhenNoInput);
   Serial.print(F(" quickStop=")); Serial.print(settings.quickStop);
   Serial.print(F(" quickStopDrop=")); Serial.print(settings.quickStopDrop);
+  Serial.print(F(" stopMoving=")); Serial.print(settings.stopMovingPercent);
+  Serial.print(F(" minHold=")); Serial.print(settings.minKeyHold);
+  Serial.print(F(" minRelease=")); Serial.print(settings.minKeyRelease);
   Serial.print(F(" saved=")); Serial.println(settingsSaved);
 }
 
@@ -573,6 +581,9 @@ bool applySetting(const char* name, long value){
     quickStopped = false;
   }
   else if (strcmp(name, "quickStopDrop") == 0) settings.quickStopDrop = min(value, 100L);
+  else if (strcmp(name, "stopMoving") == 0) settings.stopMovingPercent = min(value, 100L);
+  else if (strcmp(name, "minHold") == 0) settings.minKeyHold = max(value, MIN_KEY_HOLD_FLOOR);
+  else if (strcmp(name, "minRelease") == 0) settings.minKeyRelease = max(value, MIN_KEY_RELEASE_FLOOR);
   else return false;
   settingsSaved = false;
   return true;
@@ -635,18 +646,18 @@ void updateSpeedDirection(){
     updateQuickStop(currentTime);
 
     // Output speed and direction
-    //Serial.print("Speed: ");
+    //Serial.print(F("Speed: "));
     
     Serial.print(0); // To freeze the lower limit
-    Serial.print(" ");
+    Serial.print(F(" "));
     Serial.print(35000); // To freeze the upper limit
     
-    Serial.print(" ");
+    Serial.print(F(" "));
     Serial.print(speed);
-    Serial.print(" ");
+    Serial.print(F(" "));
     Serial.println(quickStopped); // 1 while quick stop has released the movement keys
   
-    //Serial.print(" pulses/sec, Forward: ");
+    //Serial.print(F(" pulses/sec, Forward: "));
     //Serial.println(pedalForward);
   }
 }
@@ -699,13 +710,13 @@ void updateEncoder(){
   lastEncoded = encoded; // store this value for next time
 }
 
-// Presses or releases a movement key for the pedals, keeping it down for at least MIN_KEY_HOLD and up for at least MIN_KEY_RELEASE
+// Presses or releases a movement key for the pedals, keeping it down for at least settings.minKeyHold and up for at least settings.minKeyRelease
 void updatePedalKey(PedalKey &pedalKey, bool wanted, unsigned long currentTime){
   if (wanted){
     pedalKey.lastWanted = currentTime;
   }
   bool shouldHold = currentTime < pedalKey.lastWanted + unpressInterval; // Allows smooth movement between speed updates
-  unsigned long minTime = pedalKey.held ? MIN_KEY_HOLD : MIN_KEY_RELEASE;
+  unsigned long minTime = pedalKey.held ? settings.minKeyHold : settings.minKeyRelease;
   if (shouldHold != pedalKey.held && currentTime - pedalKey.changedAt >= minTime){
     pedalKey.held = shouldHold;
     pedalKey.changedAt = currentTime;
@@ -726,7 +737,7 @@ void movementInputs(){
       movingForward = pedalForward; // Lock the direction so a noisy reading can't flip W to S mid movement
     }
     moving = true;
-  } else if (speed < settings.walkSpeed * STOP_MOVING_PERCENT / 100){
+  } else if (speed < settings.walkSpeed * settings.stopMovingPercent / 100.0){
     moving = false;
   }
 
