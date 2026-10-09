@@ -200,6 +200,10 @@
         <span class="help">When you slow down, the speed falls over about this long, so the slow point of each pedal stroke doesn't stop you or flip sprint. Speeding up is instant. Higher is steadier but slower to slow down. 0 = off.</span>
       </div>
 
+      <h3>Pedalling backwards</h3>
+      <label class="check"><input type="checkbox" id="reverseFlip"> Pedalling backwards reverses the keys I hold</label>
+      <p class="muted small" style="margin:6px 0 0">W becomes S and A becomes D (and the other way round), so pedalling backwards exactly reverses your movement. When off, held keys stay the same whichever way you pedal.</p>
+
       <h3>Quick stop</h3>
       <div id="quickStopOptions">
         <div class="row">
@@ -375,6 +379,7 @@
     }
     document.querySelector(`input[name=mode][value="${cfg.sprintOnPress}"]`).checked = true;
     $('moveWhenNoInput').checked = cfg.moveWhenNoInput === 1;
+    $('reverseFlip').checked = cfg.reverseFlip === 1;
     $('quickStop').checked = cfg.quickStop === 1;
     $('quickStopOptions').classList.toggle('off', cfg.quickStop !== 1);
     $('counterStrafe').checked = cfg.counterStrafe === 1;
@@ -425,6 +430,7 @@
   });
   $('moveWhenNoInput').addEventListener('change', (e) => send(`SET moveWhenNoInput=${e.target.checked ? 1 : 0}`));
   $('quickStop').addEventListener('change', (e) => send(`SET quickStop=${e.target.checked ? 1 : 0}`));
+  $('reverseFlip').addEventListener('change', (e) => send(`SET reverseFlip=${e.target.checked ? 1 : 0}`));
   $('counterStrafe').addEventListener('change', (e) => send(`SET counterStrafe=${e.target.checked ? 1 : 0}`));
   $('saveBtn').addEventListener('click', () => send('SAVE'));
   $('resetBtn').addEventListener('click', () => {

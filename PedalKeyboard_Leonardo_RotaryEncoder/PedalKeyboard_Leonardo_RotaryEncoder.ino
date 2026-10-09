@@ -16,6 +16,7 @@ const long SPRINT_SPEED = 16000;//22000; // Speed at which sprint is triggered
 const long STOP_SPRINT_SPEED = 9000;//6000 12000; // Speed must drop below this value to stop sprinting
 const bool SPRINT_ON_PRESS = false; //True if pressing sprint makes you faster, false if it makes you slower (eg csgo pressing shift)
 const bool MOVE_WHEN_NO_INPUT = true; //walk forwards and backwards if pedalling and no keys pressed
+const bool REVERSE_FLIPS_KEYS = false; //When pedalling backwards, each movement key you hold presses its opposite (W<->S, A<->D)
 const bool QUICK_STOP = true; //Stop moving as soon as you stop pedalling, instead of when the pedals stop spinning (eg cs2)
 const long QUICK_STOP_DROP = 20; // Stopping is detected when the speed falls this % below the slowest point of the last pedal stroke
 const bool COUNTER_STRAFE = true; // For a moment after the pedals let go of W/A/S/D, pressing W/A/S/D yourself works like a normal keyboard, so you can counter strafe
@@ -38,6 +39,7 @@ struct Settings {
   long stopSprintSpeed;
   bool sprintOnPress;
   bool moveWhenNoInput;
+  bool reverseFlipsKeys;
   bool quickStop;
   long quickStopDrop;
   bool counterStrafe;
@@ -47,14 +49,14 @@ struct Settings {
   long minKeyRelease;
   long smoothingTime;
 };
-const Settings DEFAULT_SETTINGS = {WALK_SPEED, SPRINT_SPEED, STOP_SPRINT_SPEED, SPRINT_ON_PRESS, MOVE_WHEN_NO_INPUT,
+const Settings DEFAULT_SETTINGS = {WALK_SPEED, SPRINT_SPEED, STOP_SPRINT_SPEED, SPRINT_ON_PRESS, MOVE_WHEN_NO_INPUT, REVERSE_FLIPS_KEYS,
                                    QUICK_STOP, QUICK_STOP_DROP, COUNTER_STRAFE, COUNTER_STRAFE_WINDOW, STOP_MOVING_PERCENT, MIN_KEY_HOLD, MIN_KEY_RELEASE, SMOOTHING_TIME};
 const long MIN_KEY_HOLD_FLOOR = 50; // The config app can't set the key times below these, to keep inputs human looking for anticheat
 const long MIN_KEY_RELEASE_FLOOR = 30;
 Settings settings = DEFAULT_SETTINGS; // Values actually in use
 
 // Layout of the settings saved in EEPROM. The defaults are saved too so changing them in code invalidates the saved settings
-const uint16_t SETTINGS_MAGIC = 0x504D; // Change this if the layout of SavedSettings changes
+const uint16_t SETTINGS_MAGIC = 0x504E; // Change this if the layout of SavedSettings changes
 struct SavedSettings {
   uint16_t magic;
   Settings defaults;
@@ -621,6 +623,7 @@ void printSettings(){ // e.g. CFG walk=2000 sprint=16000 stop=9000 sprintOnPress
   Serial.print(F(" stop=")); Serial.print(settings.stopSprintSpeed);
   Serial.print(F(" sprintOnPress=")); Serial.print(settings.sprintOnPress);
   Serial.print(F(" moveWhenNoInput=")); Serial.print(settings.moveWhenNoInput);
+  Serial.print(F(" reverseFlip=")); Serial.print(settings.reverseFlipsKeys);
   Serial.print(F(" quickStop=")); Serial.print(settings.quickStop);
   Serial.print(F(" quickStopDrop=")); Serial.print(settings.quickStopDrop);
   Serial.print(F(" counterStrafe=")); Serial.print(settings.counterStrafe);
@@ -644,6 +647,7 @@ bool applySetting(const char* name, long value){
     settings.sprintOnPress = value != 0;
   }
   else if (strcmp(name, "moveWhenNoInput") == 0) settings.moveWhenNoInput = value != 0;
+  else if (strcmp(name, "reverseFlip") == 0) settings.reverseFlipsKeys = value != 0;
   else if (strcmp(name, "quickStop") == 0){
     settings.quickStop = value != 0;
     quickStopped = false;
@@ -863,14 +867,19 @@ void movementInputs(){
 
   // Hold the keys you're pressing while pedalling. With no keys pressed, go forwards or backwards with the pedals
   bool move = moving && !quickStopped;
-  if (moving && (movingForward ? sPressed : wPressed)){
+  bool flip = settings.reverseFlipsKeys && !movingForward; // Pedalling backwards reverses the keys you hold
+  bool holdW = flip ? sPressed : wPressed;
+  bool holdA = flip ? dPressed : aPressed;
+  bool holdS = flip ? wPressed : sPressed;
+  bool holdD = flip ? aPressed : dPressed;
+  if (moving && ((movingForward || flip) ? sPressed : wPressed)){
     waitForPush = true; // Pressing against the pedals: don't go back to moving with them until you push again
   }
   bool autoMove = move && settings.moveWhenNoInput && !waitForPush && !(wPressed || aPressed || sPressed || dPressed);
-  pedalW.wanted = (move && wPressed) || (autoMove && movingForward);
-  pedalA.wanted = move && aPressed;
-  pedalS.wanted = (move && sPressed) || (autoMove && !movingForward);
-  pedalD.wanted = move && dPressed;
+  pedalW.wanted = (move && holdW) || (autoMove && movingForward);
+  pedalA.wanted = move && holdA;
+  pedalS.wanted = (move && holdS) || (autoMove && !movingForward);
+  pedalD.wanted = move && holdD;
 
   // Shuffle the order, so when two keys change together neither always goes first
   uint8_t order[pedalKeyCount];
