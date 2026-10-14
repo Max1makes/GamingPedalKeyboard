@@ -17,7 +17,7 @@ const long STOP_SPRINT_SPEED = 12000;//6000 12000; // Speed must drop below this
 const bool SPRINT_ON_PRESS = false; //True if pressing sprint makes you faster, false if it makes you slower (eg csgo pressing shift)
 const bool MOVE_WHEN_NO_INPUT = true; //walk forwards and backwards if pedalling and no keys pressed
 const bool REVERSE_FLIPS_KEYS = false; //When pedalling backwards, each movement key you hold presses its opposite (W<->S, A<->D)
-const bool KEYBOARD_AND_PEDALS = false; //Keyboard works as normal, and pedalling also moves you forwards/backwards (walk/run by speed)
+const bool KEYBOARD_AND_PEDALS = false; //When you're not pedalling, the keyboard works as normal. When pedalling, everything works as usual
 const bool QUICK_STOP = true; //Stop moving as soon as you stop pedalling, instead of when the pedals stop spinning (eg cs2)
 const long QUICK_STOP_DROP = 50; // Stopping is detected when the speed falls this % below the slowest point of the last pedal stroke
 const bool COUNTER_STRAFE = false; // For a moment after the pedals let go of W/A/S/D, pressing W/A/S/D yourself works like a normal keyboard, so you can counter strafe
@@ -111,6 +111,7 @@ bool sPressed = false;
 bool dPressed = false;
 bool crouched = false;
 bool leftShiftDown = false;   // True while you're holding left Shift on the keyboard
+bool pedalsInControl = false; // True while pedalling is driving the movement keys (moving, and not quick stopped)
 bool moving = false;          // True while pedalling fast enough to move (see settings.stopMovingPercent)
 bool movingForward = true;    // Direction of movement, changes once the pedals clearly turn the other way
 
@@ -125,13 +126,12 @@ struct PedalKey {
   bool manual;                // True while you're pressing it yourself for a counter strafe
   unsigned long manualUntil;  // When that press gets let go at the latest
   bool* physical;             // Whether you're holding this key on the keyboard, set in setup
-  unsigned long physicalSince; // When you pressed it on the keyboard (keyboard + pedals mode)
 };
-PedalKey pedalW = {'w', false, 0, 0, false, NULL, false, 0, NULL, 0};
-PedalKey pedalA = {'a', false, 0, 0, false, NULL, false, 0, NULL, 0};
-PedalKey pedalS = {'s', false, 0, 0, false, NULL, false, 0, NULL, 0};
-PedalKey pedalD = {'d', false, 0, 0, false, NULL, false, 0, NULL, 0};
-PedalKey pedalSprint = {sprintKey, false, 0, 0, false, NULL, false, 0, NULL, 0};
+PedalKey pedalW = {'w', false, 0, 0, false, NULL, false, 0, NULL};
+PedalKey pedalA = {'a', false, 0, 0, false, NULL, false, 0, NULL};
+PedalKey pedalS = {'s', false, 0, 0, false, NULL, false, 0, NULL};
+PedalKey pedalD = {'d', false, 0, 0, false, NULL, false, 0, NULL};
+PedalKey pedalSprint = {sprintKey, false, 0, 0, false, NULL, false, 0, NULL};
 PedalKey* const pedalKeys[] = {&pedalSprint, &pedalW, &pedalA, &pedalS, &pedalD};
 const uint8_t pedalKeyCount = sizeof(pedalKeys) / sizeof(pedalKeys[0]);
 unsigned long lastPedalKeyChange = 0; // When the pedals last pressed or released any key
@@ -146,7 +146,7 @@ bool pedalHolds(uint8_t key){
 // (the timing is all yours, so it isn't input automation). Returns true if it handled the key
 bool counterStrafeKeyDown(uint8_t key){
   bool pedalsMoving = pedalW.held || pedalA.held || pedalS.held || pedalD.held;
-  if (pedalsMoving){
+  if (pedalsMoving || pedalsInControl){
     return true; // movementInputs presses it for the pedals, a short tap here would just blip
   }
   if (!settings.counterStrafe || lastPedalMoveTime == 0
@@ -160,13 +160,13 @@ bool counterStrafeKeyDown(uint8_t key){
   return true;
 }
 
-// Keyboard + pedals mode: W/A/S/D you press always go straight through like a normal keyboard. Returns true if it handled the key
+// Keyboard + pedals mode: while you're not pedalling, W/A/S/D you press go straight through like a normal keyboard.
+// While pedalling, movementInputs handles them as usual. Returns true if it handled the key
 bool hybridKeyDown(uint8_t key){
-  if (!settings.keyboardAndPedals){
+  if (!settings.keyboardAndPedals || pedalsInControl){
     return false;
   }
   PedalKey &pedalKey = (key == WKey) ? pedalW : (key == AKey) ? pedalA : (key == SKey) ? pedalS : pedalD;
-  pedalKey.physicalSince = millis();
   Keyboard.press(pedalKey.key);
   return true;
 }
@@ -745,7 +745,7 @@ void readSerialCommands(){
 int movementState(){
   bool hybrid = settings.keyboardAndPedals;
   if (!(pedalW.held || pedalA.held || pedalS.held || pedalD.held
-        || (hybrid && (wPressed || aPressed || sPressed || dPressed)))){
+        || (hybrid && !pedalsInControl && (wPressed || aPressed || sPressed || dPressed)))){
     return 0;
   }
   bool shiftDown = pedalSprint.held || (hybrid && leftShiftDown);
@@ -872,15 +872,10 @@ void updatePedalKey(PedalKey &pedalKey, unsigned long currentTime){
   // If the opposite key is on its way up, wait until it's let go plus a gap. If you're holding both on purpose, allow it
   bool oppositeTooRecent = opposite != NULL
       && ((opposite->held && !opposite->wanted) || (!opposite->held && currentTime - opposite->changedAt < OPPOSITE_KEY_GAP));
-  // Keyboard + pedals: if you've just pressed the opposite key yourself, keep this one down a moment longer,
-  // so letting go of it never lands right on your key press
-  bool oppositeJustPressed = settings.keyboardAndPedals && opposite != NULL && *opposite->physical
-      && currentTime - opposite->physicalSince < OPPOSITE_KEY_GAP + pedalKeyStagger;
   if (shouldHold != pedalKey.held
       && currentTime - pedalKey.changedAt >= minTime
       && currentTime - lastPedalKeyChange >= pedalKeyStagger
-      && !(shouldHold && oppositeTooRecent)
-      && !(!shouldHold && oppositeJustPressed)){
+      && !(shouldHold && oppositeTooRecent)){
     pedalKey.held = shouldHold;
     pedalKey.changedAt = currentTime;
     lastPedalKeyChange = currentTime;
@@ -890,8 +885,8 @@ void updatePedalKey(PedalKey &pedalKey, unsigned long currentTime){
     Keyboard.press(pedalKey.key);
   } else if (pedalKey.manual && currentTime < pedalKey.manualUntil){
     // You're pressing it yourself for a counter strafe, leave it down
-  } else if (settings.keyboardAndPedals && pedalKey.physical != NULL && *pedalKey.physical){
-    // Keyboard + pedals: you're holding it on the keyboard, leave it down
+  } else if (settings.keyboardAndPedals && !pedalsInControl && pedalKey.physical != NULL && *pedalKey.physical){
+    Keyboard.press(pedalKey.key); // Keyboard + pedals, not pedalling: you're holding it on the keyboard, so keep it down
   } else{
     pedalKey.manual = false;
     Keyboard.release(pedalKey.key); // Also ends the short tap from pressing the key without pedalling
@@ -925,7 +920,7 @@ void movementInputs(){
 
   // Hold the keys you're pressing while pedalling. With no keys pressed, go forwards or backwards with the pedals
   bool move = moving && !quickStopped;
-  bool flip = settings.reverseFlipsKeys && !settings.keyboardAndPedals && !movingForward; // Pedalling backwards reverses the keys you hold
+  bool flip = settings.reverseFlipsKeys && !movingForward; // Pedalling backwards reverses the keys you hold
   bool holdW = flip ? sPressed : wPressed;
   bool holdA = flip ? dPressed : aPressed;
   bool holdS = flip ? wPressed : sPressed;
@@ -933,19 +928,12 @@ void movementInputs(){
   if (moving && ((movingForward || flip) ? sPressed : wPressed)){
     waitForPush = true; // Pressing against the pedals: don't go back to moving with them until you push again
   }
-  if (settings.keyboardAndPedals){
-    // The keyboard works as normal, the pedals add forwards (or backwards) on top. Holding the opposite key stops the pedals' key
-    pedalW.wanted = move && !waitForPush && movingForward && !sPressed;
-    pedalS.wanted = move && !waitForPush && !movingForward && !wPressed;
-    pedalA.wanted = false;
-    pedalD.wanted = false;
-  } else{
-    bool autoMove = move && settings.moveWhenNoInput && !waitForPush && !(wPressed || aPressed || sPressed || dPressed);
-    pedalW.wanted = (move && holdW) || (autoMove && movingForward);
-    pedalA.wanted = move && holdA;
-    pedalS.wanted = (move && holdS) || (autoMove && !movingForward);
-    pedalD.wanted = move && holdD;
-  }
+  bool autoMove = move && settings.moveWhenNoInput && !waitForPush && !(wPressed || aPressed || sPressed || dPressed);
+  pedalW.wanted = (move && holdW) || (autoMove && movingForward);
+  pedalA.wanted = move && holdA;
+  pedalS.wanted = (move && holdS) || (autoMove && !movingForward);
+  pedalD.wanted = move && holdD;
+  pedalsInControl = move;
 
   // Shuffle the order, so when two keys change together neither always goes first
   uint8_t order[pedalKeyCount];
